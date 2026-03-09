@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-update.py — Optimized parallel version
+update.py — Optimized parallel version with automatic Wix product fetch
 
-Runs Wix product updates in parallel (10 at a time) instead of one by one.
+Replaces the manual fresh_export step by:
+  1. Fetching ALL products from Wix via API at the start (replaces fresh_export)
+  2. Building a SKU → Product ID map
+  3. Updating each product in parallel (10 at a time)
 """
 
 import pandas as pd
@@ -10,7 +13,6 @@ import datetime
 import os
 import json
 import requests
-import time
 import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,24 +38,60 @@ def get_wix_headers():
     }
 
 
-def find_wix_product_by_sku(sku):
-    url  = f'{WIX_API_BASE}/products/query'
-    body = {
-        'query': {
-            'filter': json.dumps({'sku': {'$eq': sku}}),
-            'paging': {'limit': 1}
+def fetch_all_wix_products():
+    """
+    Fetches ALL products from Wix and returns a dict of {sku: product_id}.
+    This replaces the manual fresh_export CSV download step.
+    Handles pagination automatically.
+    """
+    print("Fetching all products from Wix catalog...")
+    sku_to_id = {}
+    offset    = 0
+    limit     = 100  # max per page
+
+    while True:
+        body = {
+            'query': {
+                'paging': {'limit': limit, 'offset': offset}
+            }
         }
-    }
-    try:
-        response = requests.post(url, headers=get_wix_headers(), json=body, timeout=10)
-        if response.status_code == 200:
-            products = response.json().get('products', [])
-            return products[0] if products else None
-        print(f"  Wix query failed for {sku}: {response.status_code} {response.text}")
-        return None
-    except Exception as e:
-        print(f"  Wix query error for {sku}: {e}")
-        return None
+        response = requests.post(
+            f'{WIX_API_BASE}/products/query',
+            headers=get_wix_headers(),
+            json=body,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            print(f"  Wix catalog fetch failed: {response.status_code} {response.text}")
+            break
+
+        data     = response.json()
+        products = data.get('products', [])
+
+        for product in products:
+            # Products can have variants with SKUs, or a top-level SKU
+            product_id = product.get('id')
+            # Check top-level SKU first
+            sku = product.get('sku', '').strip()
+            if sku:
+                sku_to_id[sku] = product_id
+            # Also check variants
+            for variant in product.get('variants', []):
+                v_sku = variant.get('variant', {}).get('sku', '').strip()
+                if v_sku:
+                    sku_to_id[v_sku] = product_id
+
+        print(f"  Fetched {offset + len(products)} products so far...")
+
+        # If we got fewer than limit, we've reached the end
+        if len(products) < limit:
+            break
+
+        offset += limit
+
+    print(f"  Total Wix products loaded: {len(sku_to_id)}\n")
+    return sku_to_id
 
 
 def update_wix_product(product_id, ribbon, description_html):
@@ -81,29 +119,33 @@ def update_wix_product(product_id, ribbon, description_html):
 
 # ── Per-SKU worker ─────────────────────────────────────────────────────────────
 
-def process_sku(sku, row):
+def process_sku(sku, row, sku_to_id):
     try:
         combined_stock  = row.get('combined_stock', '')
         combined_status = row.get('combined_status', '')
         current_time    = row.get('last_updated', today)
 
-        if pd.isna(combined_status) or combined_status == '':
+        # Skip SKUs that haven't been scraped yet
+        if pd.isna(combined_status) or str(combined_status).strip() == '':
             return sku, 'skipped'
 
+        # Determine ribbon
         ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' else None
 
-        if combined_status == 'Obsolete':
+        # Determine status HTML
+        if str(combined_status) == 'Obsolete':
             status_html = obsoleteText
         elif ribbon == 'In Stock':
             status_html = inStockText + f' as of {current_time}</strong></p>'
         else:
             status_html = outOfStockText
 
-        wix_product = find_wix_product_by_sku(sku)
-        if not wix_product:
+        # Look up Wix product ID from our pre-fetched map
+        product_id = sku_to_id.get(sku)
+        if not product_id:
             return sku, 'notfound'
 
-        success = update_wix_product(wix_product['id'], ribbon, status_html)
+        success = update_wix_product(product_id, ribbon, status_html)
         return sku, 'updated' if success else 'failed'
 
     except Exception as e:
@@ -119,14 +161,21 @@ def update_catalog():
     except FileNotFoundError:
         raise SystemExit("Error: comp_data.csv not found.")
 
-    print(f"Loaded {len(dfOutput)} SKUs — starting parallel Wix updates\n")
+    print(f"Loaded {len(dfOutput)} SKUs from comp_data.csv")
 
+    # Step 1 — fetch all Wix products (replaces manual fresh_export download)
+    sku_to_id = fetch_all_wix_products()
+
+    if not sku_to_id:
+        raise SystemExit("Could not fetch Wix products. Check WIX_API_KEY and WIX_SITE_ID.")
+
+    # Step 2 — update products in parallel (10 at a time)
+    print(f"Starting parallel Wix updates...\n")
     results = {'updated': 0, 'notfound': 0, 'skipped': 0, 'failed': 0}
 
-    # Run 10 Wix updates at a time
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
-            executor.submit(process_sku, sku, dfOutput.loc[sku].to_dict()): sku
+            executor.submit(process_sku, sku, dfOutput.loc[sku].to_dict(), sku_to_id): sku
             for sku in dfOutput.index
         }
 
@@ -137,12 +186,14 @@ def update_catalog():
             if result == 'updated':
                 print(f"  [{i}/{len(futures)}] ✓ {sku}")
             elif result == 'notfound':
-                print(f"  [{i}/{len(futures)}] ✗ {sku} — not in Wix")
+                print(f"  [{i}/{len(futures)}] ✗ {sku} — not in Wix catalog")
+            elif result == 'failed':
+                print(f"  [{i}/{len(futures)}] ! {sku} — update failed")
 
     print(f"\n── Update Complete ──")
     print(f"  Updated:   {results['updated']}")
     print(f"  Not found: {results['notfound']}")
-    print(f"  Skipped:   {results['skipped']}")
+    print(f"  Skipped:   {results['skipped']} (not yet scraped)")
     print(f"  Failed:    {results['failed']}")
 
 
