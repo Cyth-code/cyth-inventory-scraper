@@ -1,0 +1,86 @@
+name: Daily Product Scrape & Wix Update
+
+on:
+  # Run every day at 7:00 AM UTC (adjust to your timezone)
+  schedule:
+    - cron: '0 7 * * *'
+
+  # Allow manual trigger from the GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      start_index:
+        description: 'Override starting index (leave blank to use saved index)'
+        required: false
+        default: ''
+
+jobs:
+  scrape-and-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit comp_data.csv back to repo
+
+    steps:
+      # ── 1. Checkout the repo (includes comp_data.csv) ─────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Set up Python ──────────────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 3. Install dependencies ───────────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install requests pandas python-dotenv
+
+      # ── 4. Restore saved scrape index ─────────────────────────────────────────
+      #    scrape_index.txt is committed to the repo and updated each run.
+      #    If a manual override index was provided, that takes priority.
+      - name: Set scrape index
+        run: |
+          if [ -n "${{ github.event.inputs.start_index }}" ]; then
+            echo "INDEX=${{ github.event.inputs.start_index }}" >> $GITHUB_ENV
+            echo "Using manual override index: ${{ github.event.inputs.start_index }}"
+          elif [ -f scrape_index.txt ]; then
+            INDEX=$(cat scrape_index.txt)
+            echo "INDEX=$INDEX" >> $GITHUB_ENV
+            echo "Resuming from saved index: $INDEX"
+          else
+            echo "INDEX=0" >> $GITHUB_ENV
+            echo "No saved index found, starting from 0"
+          fi
+
+      # ── 5. Run the scraper ────────────────────────────────────────────────────
+      - name: Run scrapeNetwork.py
+        env:
+          NW_API_KEY:      ${{ secrets.NW_API_KEY }}
+          DK_CLIENT_ID:    ${{ secrets.DK_CLIENT_ID }}
+          DL_CLIENT_DATA:  ${{ secrets.DL_CLIENT_DATA }}
+          INDEX:           ${{ env.INDEX }}
+        run: python scrapeNetwork.py
+
+      # ── 6. Save the new scrape index for next run ─────────────────────────────
+      - name: Save scrape index
+        run: |
+          if [ -f scrape_index.txt ]; then
+            echo "Next run index: $(cat scrape_index.txt)"
+          fi
+
+      # ── 7. Run update.py — push changes to Wix ───────────────────────────────
+      - name: Run update.py
+        env:
+          WIX_API_KEY:  ${{ secrets.WIX_API_KEY }}
+          WIX_SITE_ID:  ${{ secrets.WIX_SITE_ID }}
+        run: python update.py
+
+      # ── 8. Commit comp_data.csv + scrape_index.txt back to repo ──────────────
+      - name: Commit updated data files
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add comp_data.csv scrape_index.txt
+          git diff --staged --quiet || git commit -m "chore: update comp_data.csv [$(date '+%Y-%m-%d')]"
+          git push
