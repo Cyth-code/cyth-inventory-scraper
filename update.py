@@ -135,7 +135,7 @@ def process_sku(sku, row, sku_to_id):
         # Determine status HTML
         if str(combined_status) == 'Obsolete':
             status_html = obsoleteText
-        elif ribbon == 'In Stock':
+        elif combined_stock == 'Active':
             status_html = inStockText + f' as of {current_time}</strong></p>'
         else:
             status_html = outOfStockText
