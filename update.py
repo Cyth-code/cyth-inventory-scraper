@@ -39,14 +39,14 @@ def get_wix_headers():
 
 
 def find_wix_product_by_sku(sku):
-    """Query Wix for a product matching the given SKU. Returns product dict or None."""
     url = f'{WIX_API_BASE}/products/query'
     body = {
         'query': {
-            'filter': json_filter('sku', sku),
+            'filter': json.dumps({'sku': {'$eq': sku}}),
             'paging': {'limit': 1}
         }
     }
+  
     response = requests.post(url, headers=get_wix_headers(), json=body)
     if response.status_code == 200:
         products = response.json().get('products', [])
