@@ -195,8 +195,10 @@ def writeToCompData(comp_data, index):
 
 def main():
     # Load credentials from environment (set as GitHub Secrets)
-    client_ids    = json.loads(os.environ['DK_CLIENT_ID'])
-    dk_client_data = json.loads(os.environ['DL_CLIENT_DATA'])
+    with open('clients.json') as f:
+        creds_file = json.load(f)
+    client_ids     = creds_file['client_ids']
+    dk_client_data = creds_file['client_data']
 
     # Load data — comp_data.csv lives in the repo and persists between runs
     comp_data = pd.read_csv('comp_data.csv').set_index('sku')
