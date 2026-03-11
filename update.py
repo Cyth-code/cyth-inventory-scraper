@@ -99,7 +99,7 @@ def update_wix_product(product_id, ribbon, description_html):
     payload = {'product': {}}
 
     if ribbon:
-        payload['product']['ribbon'] = ribbon
+        payload['product']['ribbon'] = ribbon if ribbon else ''
 
     if description_html:
         payload['product']['additionalInfoSections'] = [
