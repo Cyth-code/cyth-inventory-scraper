@@ -148,7 +148,7 @@ def combineCols(df):
         nw_status == 'NO_LONGER_MANUFACTURED' or
         nw_status == 'NO_LONGER_STOCKED' or
         dk_status == 'Obsolete' or
-        dk_status == 'Discontinued' o
+        dk_status == 'Discontinued' or
         (nw_status in ('', 'None') and dk_status in ('', 'None'))
     )
     df['combined_status'] = 'Obsolete' if is_obsolete else 'Active'
