@@ -142,6 +142,13 @@ def process_sku(sku, row, sku_to_id):
 
         # Look up Wix product ID from our pre-fetched map
         product_id = sku_to_id.get(sku)
+        # Try with leading zero after dash (e.g. 150275-1R5 → 150275-01R5)
+        if not product_id:
+            parts = sku.split('-')
+            if len(parts) == 2 and not parts[1].startswith('0'):
+                alt_sku = f"{parts[0]}-0{parts[1]}"
+                product_id = sku_to_id.get(alt_sku)
+
         if not product_id:
             return sku, 'notfound'
 
