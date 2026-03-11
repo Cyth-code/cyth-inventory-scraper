@@ -130,7 +130,7 @@ def process_sku(sku, row, sku_to_id):
             return sku, 'skipped'
 
         # Determine ribbon
-        ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' else None
+        ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
 
         # Determine status HTML
         if str(combined_status) == 'Obsolete':
