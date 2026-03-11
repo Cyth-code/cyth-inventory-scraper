@@ -98,8 +98,7 @@ def update_wix_product(product_id, ribbon, description_html):
     url     = f'{WIX_API_BASE}/products/{product_id}'
     payload = {'product': {}}
 
-    if ribbon:
-        payload['product']['ribbon'] = ribbon if ribbon else ''
+    payload['product']['ribbon'] = ribbon if ribbon else ''
 
     if description_html:
         payload['product']['additionalInfoSections'] = [
