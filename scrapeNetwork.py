@@ -152,7 +152,14 @@ def combineCols(df):
         (nw_status in ('', 'None') and dk_status in ('', 'None'))
     )
     df['combined_status'] = 'Obsolete' if is_obsolete else 'Active'
-    df['combined_stock']  = 'Active' if df.iloc[0]['InStock'] else 'Inactive'
+    
+    no_dk = dk_status in ('', 'None', 'Obsolete', 'Discontinued')
+    no_nw = nw_status in ('', 'None', 'NO_LONGER_MANUFACTURED', 'NO_LONGER_STOCKED')
+    if no_dk and no_nw:
+        df['combined_stock'] = 'Inactive'
+    else:
+        df['combined_stock'] = 'Active' if df.iloc[0]['InStock'] else 'Inactive'
+        
     df['last_updated']    = datetime.datetime.now().strftime('%m-%d-%Y')
     return df
 
