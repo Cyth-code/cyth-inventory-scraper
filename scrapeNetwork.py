@@ -135,33 +135,19 @@ def getDigikeyRow(sku, client_id, access_token):
 # ── Combine ────────────────────────────────────────────────────────────────────
 
 def combineCols(df):
-    df['combined_inventory'] = (
-        pd.to_numeric(df['newark_inventory'], errors='coerce').fillna(0) +
-        pd.to_numeric(df['digikey_inventory'], errors='coerce').fillna(0)
-    )
-    df['InStock'] = df['combined_inventory'] > 0
-
+    # Only use DigiKey for status decisions
     dk_status = str(df.iloc[0].get('digikey_status', ''))
-    nw_status = str(df.iloc[0].get('newark_status', ''))
+    dk_inventory = pd.to_numeric(df.iloc[0].get('digikey_inventory', 0), errors='coerce') or 0
 
-    is_obsolete = (
-        nw_status == 'NO_LONGER_MANUFACTURED' or
-        nw_status == 'NO_LONGER_STOCKED' or
-        dk_status == 'Obsolete' or
-        dk_status == 'Discontinued' or
-        (nw_status in ('', 'None') and dk_status in ('', 'None'))
-    )
+    # Obsolete only if DigiKey says so
+    is_obsolete = dk_status in ('Obsolete', 'Discontinued', '')
+
     df['combined_status'] = 'Obsolete' if is_obsolete else 'Active'
-    
-    no_dk = dk_status in ('', 'None', 'Obsolete', 'Discontinued')
-    no_nw = nw_status in ('', 'None', 'NO_LONGER_MANUFACTURED', 'NO_LONGER_STOCKED')
-    if no_dk and no_nw:
-        df['combined_stock'] = 'Inactive'
-    else:
-        df['combined_stock'] = 'Active' if df.iloc[0]['InStock'] else 'Inactive'
-        
-    df['last_updated']    = datetime.datetime.now().strftime('%m-%d-%Y')
-    return df
+
+    # Stock only based on DigiKey inventory
+    df['combined_stock'] = 'Active' if dk_inventory > 0 else 'Inactive'
+    df['InStock'] = dk_inventory > 0
+    df['last_updated'] = datetime.datetime.now().strftime('%m-%d-%Y')
 
 # ── Worker ─────────────────────────────────────────────────────────────────────
 
