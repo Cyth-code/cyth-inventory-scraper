@@ -72,82 +72,82 @@ jobs:
           git push
 
       # ── Step 6: Build and send email report ──────────────────────────────
-      - name: Build email report
-        if: always()
-        run: |
-          python - << 'EOF'
-          import json, os, datetime
+     # - name: Build email report
+        #if: always()
+        #run: |
+          #python - << 'EOF'
+         # import json, os, datetime
 
-          summary = {}
-          if os.path.exists('full_summary.json'):
-              with open('full_summary.json') as f:
-                  summary = json.load(f)
+         # summary = {}
+        #  if os.path.exists('full_summary.json'):
+             # with open('full_summary.json') as f:
+                 # summary = json.load(f)
 
-          status        = summary.get('status', 'Unknown')
-          run_date      = summary.get('run_date', datetime.datetime.now().strftime('%m/%d/%Y %I:%M %p UTC'))
-          total         = summary.get('total_skus', 'N/A')
-          processed     = summary.get('skus_processed', 'N/A')
-          failed_scrape = summary.get('failed_skus', 0)
-          next_index    = summary.get('next_index', 'N/A')
-          clients_rem   = summary.get('clients_remaining', 'N/A')
-          clients_tot   = summary.get('clients_total', 'N/A')
-          wix_updated   = summary.get('wix_updated', 'N/A')
-          wix_notfound  = summary.get('wix_notfound', 0)
-          wix_failed    = summary.get('wix_failed', 0)
-          wix_skipped   = summary.get('wix_skipped', 0)
-          in_stock      = summary.get('in_stock', 'N/A')
-          out_stock     = summary.get('out_of_stock', 'N/A')
-          obsolete      = summary.get('obsolete', 'N/A')
-          not_found     = summary.get('not_found_skus', [])
+        #  status        = summary.get('status', 'Unknown')
+        #  run_date      = summary.get('run_date', datetime.datetime.now().strftime('%m/%d/%Y %I:%M %p UTC'))
+        #  total         = summary.get('total_skus', 'N/A')
+         # processed     = summary.get('skus_processed', 'N/A')
+         # failed_scrape = summary.get('failed_skus', 0)
+         # next_index    = summary.get('next_index', 'N/A')
+          #clients_rem   = summary.get('clients_remaining', 'N/A')
+         # clients_tot   = summary.get('clients_total', 'N/A')
+          #wix_updated   = summary.get('wix_updated', 'N/A')
+          #wix_notfound  = summary.get('wix_notfound', 0)
+          #wix_failed    = summary.get('wix_failed', 0)
+          #wix_skipped   = summary.get('wix_skipped', 0)
+         # in_stock      = summary.get('in_stock', 'N/A')
+         # out_stock     = summary.get('out_of_stock', 'N/A')
+        #  obsolete      = summary.get('obsolete', 'N/A')
+         # not_found     = summary.get('not_found_skus', [])
 
-          status_icon = '✅' if status == 'Success' else '❌'
+          #status_icon = '✅' if status == 'Success' else '❌'
 
-          not_found_str = ''
-          if not_found:
-              not_found_str = f"\n\nSKUs not found in Wix ({len(not_found)}):\n" + ', '.join(not_found)
+         # not_found_str = ''
+          #if not_found:
+             # not_found_str = f"\n\nSKUs not found in Wix ({len(not_found)}):\n" + ', '.join(not_found)
 
-          body = f"""Inventory Scraper Weekly Report
-          {status_icon} Status: {status}
-          Run Time: {run_date}
+        #  body = f"""Inventory Scraper Weekly Report
+         # {status_icon} Status: {status}
+         # Run Time: {run_date}
 
-          ── Catalog Sync ──
-          Total SKUs in Wix:  {total}
+         # ── Catalog Sync ──
+          #Total SKUs in Wix:  {total}
 
-          ── Scrape Results ──
-          SKUs Processed:     {processed} / {total}
-          Failed SKUs:        {failed_scrape}
-          Next Run Index:     {next_index}
-          DigiKey Clients:    {clients_rem} / {clients_tot} remaining
+         # ── Scrape Results ──
+         # SKUs Processed:     {processed} / {total}
+          #Failed SKUs:        {failed_scrape}
+         # Next Run Index:     {next_index}
+        #  DigiKey Clients:    {clients_rem} / {clients_tot} remaining
 
-          ── Stock Breakdown ──
-          In Stock:           {in_stock}
-          Out of Stock:       {out_stock}
-          Obsolete:           {obsolete}
+          #── Stock Breakdown ──
+         # In Stock:           {in_stock}
+         # Out of Stock:       {out_stock}
+         # Obsolete:           {obsolete}
 
-          ── Wix Update Results ──
-          Updated:            {wix_updated}
-          Not Found in Wix:   {wix_notfound}
-          Skipped:            {wix_skipped}
-          Failed:             {wix_failed}
-          {not_found_str}
+        #  ── Wix Update Results ──
+        # Updated:            {wix_updated}
+        #  Not Found in Wix:   {wix_notfound}
+         # Skipped:            {wix_skipped}
+         # Failed:             {wix_failed}
+         # {not_found_str}
 
-          View full logs: https://github.com/${{ github.repository }}/actions
-          """
+         # View full logs: https://github.com/${{ github.repository }}/actions
+        #  """
 
-          with open('email_body.txt', 'w') as f:
-              f.write(body)
-          print("Email body generated")
-          EOF
+         # with open('email_body.txt', 'w') as f:
+          #    f.write(body)
+         # print("Email body generated")
+         # EOF
 
-      - name: Send email report
-        if: always()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Inventory Scraper Weekly Report — ${{ job.status == 'success' && '✅' || '❌' }}"
-          to: noopura.vaidya@cyth.com
-          from: Inventory Scraper
-          body: file://email_body.txt
+      #- name: Send email report
+      #  if: always()
+       # uses: dawidd6/action-send-mail@v3
+        #with:
+         # server_address: smtp.gmail.com
+         # server_port: 465
+         # username: ${{ secrets.EMAIL_USERNAME }}
+         # password: ${{ secrets.EMAIL_PASSWORD }}
+         # subject: "Inventory Scraper Weekly Report — ${{ job.status == 'success' && '✅' || '❌' }}"
+         # to: noopura.vaidya@cyth.com
+         # from: Inventory Scraper
+         # body: file://email_body.txt
