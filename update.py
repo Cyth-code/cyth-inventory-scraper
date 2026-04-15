@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-update.py — Optimized parallel version with automatic Wix product fetch
+update.py — Pushes scraped data directly to Wix CMS collection
 
-Logic:
-  - Fetches ALL products from Wix via API at the start
-  - Builds SKU → Product ID map
-  - Updates ribbon and stock status in parallel (10 at a time)
-  - Clears ribbon for obsolete products
-  - Tries leading zero SKU variation if not found
+Instead of updating product ribbons, this version:
+  1. Reads comp_data.csv
+  2. Fetches all existing items from the CMS collection (by SKU)
+  3. Updates existing items or creates new ones
+  4. Runs 10 updates in parallel
 """
 
 import pandas as pd
@@ -22,15 +21,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 script_dir = Path(__file__).resolve().parent
 os.chdir(script_dir)
 
-# ── Status HTML ────────────────────────────────────────────────────────────────
-inStockText    = '<p style="color: #008000;"><strong>In-Stock Ready-to-Ship'
-outOfStockText = '<p style="color: #000000;"><strong>Available to Order</strong></p> '
-obsoleteText   = '<p style="color: #FF0000;"><strong>OBSOLETE - CONTACT CYTH</strong></p>'
-
 today = datetime.datetime.now().strftime('%Y-%m-%d')
 
-# ── Wix REST API ───────────────────────────────────────────────────────────────
-WIX_API_BASE = 'https://www.wixapis.com/stores/v1'
+# ── Wix CMS API ────────────────────────────────────────────────────────────────
+WIX_CMS_BASE   = 'https://www.wixapis.com/wix-data/v2/items'
+COLLECTION_ID  = 'Import912'
 
 def get_wix_headers():
     return {
@@ -40,105 +35,128 @@ def get_wix_headers():
     }
 
 
-def fetch_all_wix_products():
-    print("Fetching all products from Wix catalog...")
-    sku_to_id = {}
-    offset    = 0
-    limit     = 100
+def fetch_all_cms_items():
+    """Fetch all existing items from CMS collection, keyed by SKU."""
+    print("Fetching existing CMS items...")
+    sku_to_item = {}
+    offset      = 0
+    limit       = 100
 
     while True:
-        body = {'query': {'paging': {'limit': limit, 'offset': offset}}}
+        body = {
+            'dataCollectionId': COLLECTION_ID,
+            'query': {
+                'paging': {'limit': limit, 'offset': offset}
+            }
+        }
         response = requests.post(
-            f'{WIX_API_BASE}/products/query',
+            f'https://www.wixapis.com/wix-data/v2/items/query',
             headers=get_wix_headers(),
             json=body,
             timeout=15
         )
 
         if response.status_code != 200:
-            print(f"  Wix catalog fetch failed: {response.status_code} {response.text}")
+            print(f"  CMS fetch failed: {response.status_code} {response.text}")
             break
 
-        data     = response.json()
-        products = data.get('products', [])
+        data  = response.json()
+        items = data.get('dataItems', [])
 
-        for product in products:
-            product_id = product.get('id')
-            sku = product.get('sku', '').strip()
+        for item in items:
+            sku = item.get('data', {}).get('sku', '').strip()
             if sku:
-                sku_to_id[sku] = product_id
-            for variant in product.get('variants', []):
-                v_sku = variant.get('variant', {}).get('sku', '').strip()
-                if v_sku:
-                    sku_to_id[v_sku] = product_id
+                sku_to_item[sku] = item.get('id')
 
-        print(f"  Fetched {offset + len(products)} products so far...")
+        print(f"  Fetched {offset + len(items)} items...")
 
-        if len(products) < limit:
+        if not items:
             break
 
         offset += limit
 
-    print(f"  Total Wix products loaded: {len(sku_to_id)}\n")
-    return sku_to_id
+    print(f"  Total CMS items: {len(sku_to_item)}\n")
+    return sku_to_item
 
 
-def update_wix_product(product_id, ribbon, description_html):
-    url     = f'{WIX_API_BASE}/products/{product_id}'
-    payload = {'product': {}}
-
-    # Always send ribbon — empty string clears it
-    payload['product']['ribbon'] = ribbon if ribbon else ''
-
-    if description_html:
-        payload['product']['additionalInfoSections'] = [
-            {'title': 'Stock Status', 'description': description_html}
-        ]
-
+def update_cms_item(item_id, data):
+    """Update an existing CMS item."""
+    body = {
+        'dataCollectionId': COLLECTION_ID,
+        'dataItem': {
+            'id':   item_id,
+            'data': data
+        }
+    }
     try:
-        response = requests.patch(url, headers=get_wix_headers(), json=payload, timeout=10)
+        response = requests.put(
+            f'{WIX_CMS_BASE}/{item_id}',
+            headers=get_wix_headers(),
+            json=body,
+            timeout=10
+        )
         return response.status_code == 200
     except Exception as e:
-        print(f"  Wix update error {product_id}: {e}")
+        print(f"  CMS update error {item_id}: {e}")
         return False
 
 
-def process_sku(sku, row, sku_to_id):
+def create_cms_item(data):
+    """Create a new CMS item."""
+    body = {
+        'dataCollectionId': COLLECTION_ID,
+        'dataItem': {
+            'data': data
+        }
+    }
     try:
-        combined_stock  = str(row.get('combined_stock', ''))
-        combined_status = str(row.get('combined_status', ''))
-        current_time    = row.get('last_updated', today)
+        response = requests.post(
+            WIX_CMS_BASE,
+            headers=get_wix_headers(),
+            json=body,
+            timeout=10
+        )
+        return response.status_code in (200, 201)
+    except Exception as e:
+        print(f"  CMS create error: {e}")
+        return False
 
-        # Skip SKUs that haven't been scraped yet
-        if pd.isna(row.get('combined_status')) or combined_status.strip() == '' or combined_status == 'nan':
+
+def process_sku(sku, row, sku_to_item):
+    """Update or create a CMS item for this SKU."""
+    try:
+        combined_status = str(row.get('combined_status', ''))
+        combined_stock  = str(row.get('combined_stock', ''))
+
+        # Skip unscraped SKUs
+        if pd.isna(row.get('combined_status')) or combined_status in ('', 'nan'):
             return sku, 'skipped'
 
-        # Determine ribbon — never show ribbon for obsolete
-        ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
+        # Build CMS data payload
+        data = {
+            'sku':                sku,
+            'digikey_url':        str(row.get('digikey_url', '') or ''),
+            'digikey_inventory':  float(row.get('digikey_inventory', 0) or 0),
+            'digikey_price':      float(row.get('digikey_price', 0) or 0),
+            'digikey_status':     str(row.get('digikey_status', '') or ''),
+            'newark_url':         str(row.get('newark_url', '') or ''),
+            'newark_inventory':   float(row.get('newark_inventory', 0) or 0),
+            'newark_price':       float(row.get('newark_price', 0) or 0),
+            'newark_status':      str(row.get('newark_status', '') or ''),
+            'combined_inventory': float(row.get('combined_inventory', 0) or 0),
+            'InStock':            bool(row.get('InStock', False)),
+            'combined_status':    combined_status,
+            'last_updated':       str(row.get('last_updated', today) or today),
+        }
 
-        # Determine status HTML
-        if combined_status == 'Obsolete':
-            status_html = obsoleteText
-        elif combined_stock == 'Active':
-            status_html = inStockText + f' as of {current_time}</strong></p>'
+        item_id = sku_to_item.get(sku)
+
+        if item_id:
+            success = update_cms_item(item_id, data)
+            return sku, 'updated' if success else 'failed'
         else:
-            status_html = outOfStockText
-
-        # Look up Wix product ID
-        product_id = sku_to_id.get(sku)
-
-        # Try with leading zero after dash (e.g. 150275-1R5 → 150275-01R5)
-        if not product_id:
-            parts = sku.split('-')
-            if len(parts) == 2 and not parts[1].startswith('0'):
-                alt_sku = f"{parts[0]}-0{parts[1]}"
-                product_id = sku_to_id.get(alt_sku)
-
-        if not product_id:
-            return sku, 'notfound'
-
-        success = update_wix_product(product_id, ribbon, status_html)
-        return sku, 'updated' if success else 'failed'
+            success = create_cms_item(data)
+            return sku, 'created' if success else 'failed'
 
     except Exception as e:
         print(f"  Error on {sku}: {e}")
@@ -153,22 +171,20 @@ def update_catalog():
 
     print(f"Loaded {len(dfOutput)} SKUs from comp_data.csv")
 
-    sku_to_id = fetch_all_wix_products()
-    if not sku_to_id:
-        raise SystemExit("Could not fetch Wix products. Check WIX_API_KEY and WIX_SITE_ID.")
+    # Fetch existing CMS items
+    sku_to_item = fetch_all_cms_items()
 
-    print(f"Starting parallel Wix updates...\n")
-    results        = {'updated': 0, 'notfound': 0, 'skipped': 0, 'failed': 0}
-    not_found_skus = []
+    print(f"Starting parallel CMS updates...\n")
+    results = {'updated': 0, 'created': 0, 'skipped': 0, 'failed': 0}
 
     # Stock breakdown
-    in_stock  = int((dfOutput['combined_stock'] == 'Active').sum()) if 'combined_stock' in dfOutput.columns else 0
-    obsolete  = int((dfOutput['combined_status'] == 'Obsolete').sum()) if 'combined_status' in dfOutput.columns else 0
+    in_stock = int((dfOutput['combined_stock'] == 'Active').sum()) if 'combined_stock' in dfOutput.columns else 0
+    obsolete = int((dfOutput['combined_status'] == 'Obsolete').sum()) if 'combined_status' in dfOutput.columns else 0
     out_stock = int(len(dfOutput) - in_stock - obsolete)
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
-            executor.submit(process_sku, sku, dfOutput.loc[sku].to_dict(), sku_to_id): sku
+            executor.submit(process_sku, sku, dfOutput.loc[sku].to_dict(), sku_to_item): sku
             for sku in dfOutput.index
         }
 
@@ -176,19 +192,16 @@ def update_catalog():
             sku, result = fut.result()
             results[result] += 1
 
-            if result == 'updated':
-                print(f"  [{i}/{len(futures)}] ✓ {sku}")
-            elif result == 'notfound':
-                not_found_skus.append(sku)
-                print(f"  [{i}/{len(futures)}] ✗ {sku} — not in Wix")
+            if result in ('updated', 'created'):
+                print(f"  [{i}/{len(futures)}] ✓ {sku} ({result})")
             elif result == 'failed':
-                print(f"  [{i}/{len(futures)}] ! {sku} — update failed")
+                print(f"  [{i}/{len(futures)}] ! {sku} — failed")
 
-    print(f"\n── Update Complete ──")
-    print(f"  Updated:   {results['updated']}")
-    print(f"  Not found: {results['notfound']}")
-    print(f"  Skipped:   {results['skipped']}")
-    print(f"  Failed:    {results['failed']}")
+    print(f"\n── CMS Update Complete ──")
+    print(f"  Updated:  {results['updated']}")
+    print(f"  Created:  {results['created']}")
+    print(f"  Skipped:  {results['skipped']}")
+    print(f"  Failed:   {results['failed']}")
 
     # Write summary
     scrape_summary = {}
@@ -198,14 +211,13 @@ def update_catalog():
 
     full_summary = {
         **scrape_summary,
-        'wix_updated':    results['updated'],
-        'wix_notfound':   results['notfound'],
-        'wix_skipped':    results['skipped'],
-        'wix_failed':     results['failed'],
-        'in_stock':       in_stock,
-        'out_of_stock':   out_stock,
-        'obsolete':       obsolete,
-        'not_found_skus': not_found_skus[:20],
+        'wix_updated':  results['updated'],
+        'wix_created':  results['created'],
+        'wix_skipped':  results['skipped'],
+        'wix_failed':   results['failed'],
+        'in_stock':     in_stock,
+        'out_of_stock': out_stock,
+        'obsolete':     obsolete,
     }
 
     with open('full_summary.json', 'w') as f:
