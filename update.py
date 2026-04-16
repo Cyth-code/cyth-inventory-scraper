@@ -25,11 +25,6 @@ COLLECTION_ID  = 'Import912'
 WIX_CMS_BASE   = 'https://www.wixapis.com/wix-data/v2/items'
 WIX_STORE_BASE = 'https://www.wixapis.com/stores/v1'
 
-# ── Status HTML ────────────────────────────────────────────────────────────────
-inStockText    = '<p style="color: #008000;"><strong>In-Stock Ready-to-Ship'
-outOfStockText = '<p style="color: #000000;"><strong>Available to Order</strong></p>'
-obsoleteText   = '<p style="color: #FF0000;"><strong>OBSOLETE - CONTACT CYTH</strong></p>'
-
 def get_wix_headers():
     return {
         'Authorization': os.environ['WIX_API_KEY'],
@@ -37,12 +32,27 @@ def get_wix_headers():
         'Content-Type':  'application/json'
     }
 
+# ── Safe value helpers ─────────────────────────────────────────────────────────
+
+def safe_float(val, default=0.0):
+    try:
+        v = float(val)
+        if v != v or v == float('inf') or v == float('-inf'):
+            return default
+        return v
+    except:
+        return default
+
+def safe_str(val):
+    if val is None or (isinstance(val, float) and val != val):
+        return ''
+    return str(val).strip()
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PART 1 — CMS Collection Update
 # ══════════════════════════════════════════════════════════════════════════════
 
 def fetch_all_cms_items():
-    """Fetch all existing CMS items keyed by SKU."""
     print("Fetching existing CMS items...")
     sku_to_item = {}
     offset      = 0
@@ -117,26 +127,26 @@ def create_cms_item(data):
 
 def process_cms_sku(sku, row, sku_to_item):
     try:
-        combined_status = str(row.get('combined_status', ''))
-        combined_stock  = str(row.get('combined_stock', ''))
+        combined_status = safe_str(row.get('combined_status'))
+        combined_stock  = safe_str(row.get('combined_stock'))
 
         if pd.isna(row.get('combined_status')) or combined_status in ('', 'nan'):
             return sku, 'skipped'
 
         data = {
             'sku':                sku,
-            'digikey_url':        str(row.get('digikey_url', '') or ''),
-            'digikey_inventory':  float(row.get('digikey_inventory', 0) or 0),
-            'digikey_price':      float(row.get('digikey_price', 0) or 0),
-            'digikey_status':     str(row.get('digikey_status', '') or ''),
-            'newark_url':         str(row.get('newark_url', '') or ''),
-            'newark_inventory':   float(row.get('newark_inventory', 0) or 0),
-            'newark_price':       float(row.get('newark_price', 0) or 0),
-            'newark_status':      str(row.get('newark_status', '') or ''),
-            'combined_inventory': float(row.get('combined_inventory', 0) or 0),
+            'digikey_url':        safe_str(row.get('digikey_url')),
+            'digikey_inventory':  safe_float(row.get('digikey_inventory')),
+            'digikey_price':      safe_float(row.get('digikey_price')),
+            'digikey_status':     safe_str(row.get('digikey_status')),
+            'newark_url':         safe_str(row.get('newark_url')),
+            'newark_inventory':   safe_float(row.get('newark_inventory')),
+            'newark_price':       safe_float(row.get('newark_price')),
+            'newark_status':      safe_str(row.get('newark_status')),
+            'combined_inventory': safe_float(row.get('combined_inventory')),
             'InStock':            bool(row.get('InStock', False)),
             'combined_status':    combined_status,
-            'last_updated':       str(row.get('last_updated', today) or today),
+            'last_updated':       safe_str(row.get('last_updated')) or today,
         }
 
         item_id = sku_to_item.get(sku)
@@ -181,7 +191,6 @@ def run_cms_update(dfOutput):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def fetch_all_wix_products():
-    """Fetch all Wix Store products keyed by SKU."""
     print("Fetching Wix Store products...")
     sku_to_id = {}
     offset    = 0
@@ -237,8 +246,8 @@ def update_store_ribbon(product_id, ribbon):
 
 def process_store_sku(sku, row, sku_to_id):
     try:
-        combined_stock  = str(row.get('combined_stock', ''))
-        combined_status = str(row.get('combined_status', ''))
+        combined_stock  = safe_str(row.get('combined_stock'))
+        combined_status = safe_str(row.get('combined_status'))
 
         if pd.isna(row.get('combined_status')) or combined_status in ('', 'nan'):
             return sku, 'skipped'
@@ -246,7 +255,7 @@ def process_store_sku(sku, row, sku_to_id):
         # Never show ribbon for obsolete products
         ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
 
-        # Try exact SKU match first
+        # Try exact SKU match
         product_id = sku_to_id.get(sku)
 
         # Try with leading zero after dash (e.g. 150275-1R5 → 150275-01R5)
@@ -272,9 +281,9 @@ def run_store_update(dfOutput):
     print("STEP 2 — Updating Store Ribbons")
     print("═" * 50)
 
-    sku_to_id   = fetch_all_wix_products()
-    results     = {'updated': 0, 'notfound': 0, 'skipped': 0, 'failed': 0}
-    not_found   = []
+    sku_to_id = fetch_all_wix_products()
+    results   = {'updated': 0, 'notfound': 0, 'skipped': 0, 'failed': 0}
+    not_found = []
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
@@ -321,9 +330,9 @@ def update_catalog():
     print("═" * 50)
     print("SUMMARY")
     print("═" * 50)
-    print(f"  In Stock:    {in_stock}")
-    print(f"  Out of Stock:{out_stock}")
-    print(f"  Obsolete:    {obsolete}")
+    print(f"  In Stock:     {in_stock}")
+    print(f"  Out of Stock: {out_stock}")
+    print(f"  Obsolete:     {obsolete}")
 
     # Write summary for email report
     scrape_summary = {}
