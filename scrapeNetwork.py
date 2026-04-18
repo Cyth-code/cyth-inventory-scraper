@@ -201,7 +201,7 @@ def buildCompRow(sku, dk_row):
         combined_stock  = 'Inactive'
 
     dk_row['combined_inventory'] = combined_inventory
-    dk_row['InStock']            = combined_inventory > 0
+    dk_row['InStock'] = 'True' if combined_inventory > 0 else 'False'
     dk_row['combined_stock']     = combined_stock
     dk_row['combined_status']    = combined_status
     dk_row['last_updated']       = current_time
@@ -258,6 +258,7 @@ def main():
         'combined_status': str,
         'combined_stock':  str,
         'last_updated':    str,
+        'InStock':         str,
     }).set_index('sku')
 
     total = len(comp_data)
