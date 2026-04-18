@@ -153,7 +153,7 @@ def process_cms_sku(sku, row, sku_to_item):
             'newark_price':       safe_float(row.get('newark_price')),
             'newark_status':      safe_str(row.get('newark_status')),
             'combined_inventory': safe_float(row.get('combined_inventory')),
-            'InStock':            safe_bool(row.get('InStock', False)),
+            'inStock':            safe_bool(row.get('inStock', False)),
             'combined_status':    combined_status,
             'last_updated':       safe_str(row.get('last_updated'), default=today),
         }
