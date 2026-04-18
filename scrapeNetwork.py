@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-scrapeNetwork.py — DigiKey-first logic, weekly run
+scrapeNetwork.py — DigiKey-first logic, weekly run (Wednesday midnight Pacific)
 
 Logic:
   1. Check DigiKey first
@@ -10,8 +10,7 @@ Logic:
      - Newark has stock → Ships in 3-5 Days
      - Neither has stock but active → Available to Order
      - Both obsolete → OBSOLETE - CONTACT CYTH
-
-Runs weekly on Monday at midnight Pacific (7 AM UTC).
+  3. Missing URLs set to 'NA'
 """
 
 import requests
@@ -20,6 +19,7 @@ import datetime
 import os
 import json
 import threading
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -53,14 +53,16 @@ def getNewarkJson(sku):
 
 
 def getNewarkData(sku):
-    """Returns (inventory, status) from Newark."""
+    """Returns (inventory, status, url, price) from Newark."""
     data = getNewarkJson(sku)
     if data and data['manufacturerPartNumberSearchReturn']['numberOfResults'] > 0:
         p = data['manufacturerPartNumberSearchReturn']['products'][0]
         inventory = p.get('inv', 0) or 0
         status    = p.get('productStatus', '')
-        return int(inventory), status
-    return 0, ''
+        url       = p.get('productURL', 'NA') or 'NA'
+        price     = p.get('prices', [{}])[0].get('cost', 0) or 0
+        return int(inventory), status, url, float(price)
+    return 0, '', 'NA', 0.0
 
 # ── DigiKey API ────────────────────────────────────────────────────────────────
 
@@ -94,8 +96,13 @@ def getDigiKeyResponse(sku, client_id, access_token):
 
 
 def empty_row(sku):
-    row = {'sku': sku, 'digikey_url': None, 'digikey_inventory': 0,
-           'digikey_price': None, 'digikey_status': ''}
+    row = {
+        'sku':               sku,
+        'digikey_url':       'NA',
+        'digikey_inventory': 0,
+        'digikey_price':     0.0,
+        'digikey_status':    ''
+    }
     return pd.DataFrame({k: [v] for k, v in row.items()}).set_index('sku')
 
 
@@ -133,12 +140,12 @@ def getDigikeyRow(sku, client_id, access_token):
     productInfo = response.json()['Product']
     productData = {
         'sku':               sku,
-        'digikey_url':       productInfo['ProductUrl'],
-        'digikey_inventory': productInfo['QuantityAvailable'],
+        'digikey_url':       productInfo.get('ProductUrl', 'NA') or 'NA',
+        'digikey_inventory': productInfo.get('QuantityAvailable', 0),
         'digikey_status':    productInfo['ProductStatus']['Status'],
         'digikey_price':     (
             productInfo['ProductVariations'][0]['StandardPricing'][0]['UnitPrice']
-            if productInfo['ProductVariations'][0]['StandardPricing'] else 0
+            if productInfo['ProductVariations'][0]['StandardPricing'] else 0.0
         ),
     }
     return pd.DataFrame({k: [v] for k, v in productData.items()}).set_index('sku'), False
@@ -146,14 +153,6 @@ def getDigikeyRow(sku, client_id, access_token):
 # ── DigiKey-first Logic ────────────────────────────────────────────────────────
 
 def buildCompRow(sku, dk_row):
-    """
-    DigiKey-first logic:
-    1. DigiKey in stock → Active, skip Newark
-    2. DigiKey out of stock/obsolete → check Newark
-    3. Newark in stock → Active (Ships in 3-5 Days)
-    4. Neither in stock but active → Available to Order
-    5. Both obsolete → Obsolete
-    """
     current_time = datetime.datetime.now().strftime('%m-%d-%Y')
 
     dk_inventory = int(pd.to_numeric(dk_row.iloc[0].get('digikey_inventory', 0), errors='coerce') or 0)
@@ -166,8 +165,8 @@ def buildCompRow(sku, dk_row):
         print(f"  {sku}: DigiKey in stock ({dk_inventory}) — skipping Newark")
         dk_row['newark_inventory'] = 0
         dk_row['newark_status']    = ''
-        dk_row['newark_url']       = None
-        dk_row['newark_price']     = None
+        dk_row['newark_url']       = 'NA'
+        dk_row['newark_price']     = 0.0
         dk_row['combined_inventory'] = dk_inventory
         dk_row['InStock']          = True
         dk_row['combined_stock']   = 'Active'
@@ -177,28 +176,25 @@ def buildCompRow(sku, dk_row):
 
     # ── Step 2: DigiKey out of stock/obsolete → check Newark ──
     print(f"  {sku}: DigiKey no stock — checking Newark")
-    nw_inventory, nw_status = getNewarkData(sku)
+    nw_inventory, nw_status, nw_url, nw_price = getNewarkData(sku)
     nw_obsolete = nw_status in ('NO_LONGER_MANUFACTURED', 'NO_LONGER_STOCKED', '')
     nw_in_stock = nw_inventory > 0
 
     dk_row['newark_inventory'] = nw_inventory
     dk_row['newark_status']    = nw_status
-    dk_row['newark_url']       = None
-    dk_row['newark_price']     = None
+    dk_row['newark_url']       = nw_url
+    dk_row['newark_price']     = nw_price
 
     combined_inventory = dk_inventory + nw_inventory
 
     # ── Step 3: Final status ──
     if nw_in_stock and not nw_obsolete:
-        # Newark has stock → can resell → Ships in 3-5 Days
         combined_status = 'Active'
         combined_stock  = 'Active'
     elif not dk_obsolete or not nw_obsolete:
-        # At least one still active but no stock → Available to Order
         combined_status = 'Active'
         combined_stock  = 'Inactive'
     else:
-        # Both obsolete → Obsolete
         combined_status = 'Obsolete'
         combined_stock  = 'Inactive'
 
@@ -215,18 +211,32 @@ def buildCompRow(sku, dk_row):
 write_lock = threading.Lock()
 
 def process_sku(sku, client_id, access_token):
-    try:
-        dk_result, exhausted = getDigikeyRow(sku, client_id, access_token)
+    max_retries = 3
+    attempt     = 0
 
-        if dk_result is None:
-            return sku, None, exhausted
+    while attempt < max_retries:
+        try:
+            dk_result, exhausted = getDigikeyRow(sku, client_id, access_token)
 
-        comp_row = buildCompRow(sku, dk_result)
-        return sku, comp_row, exhausted
+            if exhausted:
+                return sku, None, True
 
-    except Exception as e:
-        print(f"  Error processing {sku}: {e}")
-        return sku, None, False
+            if dk_result is None:
+                attempt += 1
+                print(f"  {sku}: attempt {attempt}/{max_retries} failed, retrying...")
+                time.sleep(5 * attempt)
+                continue
+
+            comp_row = buildCompRow(sku, dk_result)
+            return sku, comp_row, False
+
+        except Exception as e:
+            attempt += 1
+            print(f"  Error on {sku} attempt {attempt}/{max_retries}: {e}")
+            time.sleep(5 * attempt)
+
+    print(f"  ⚠️ {sku}: failed after {max_retries} attempts")
+    return sku, None, False
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
@@ -314,7 +324,6 @@ def main():
     with open('scrape_index.txt', 'w') as f:
         f.write(str(next_index))
 
-    # Write summary
     summary = {
         'run_date':          datetime.datetime.now().strftime('%m/%d/%Y %I:%M %p UTC'),
         'status':            'Success' if processed > 0 else 'Failed',
