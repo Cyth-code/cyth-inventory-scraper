@@ -38,22 +38,22 @@ jobs:
         run: python sync_catalog.py
 
       # ── Step 2: Set scrape index ──────────────────────────────────────────
-      #- name: Set scrape index
-       # run: |
-          #if [ -n "${{ github.event.inputs.start_index }}" ]; then
-          #  echo "INDEX=${{ github.event.inputs.start_index }}" >> $GITHUB_ENV
-          #elif [ -f scrape_index.txt ]; then
-           # echo "INDEX=$(cat scrape_index.txt)" >> $GITHUB_ENV
-          #else
-          #  echo "INDEX=0" >> $GITHUB_ENV
-         # fi
+      - name: Set scrape index
+        run: |
+          if [ -n "${{ github.event.inputs.start_index }}" ]; then
+            echo "INDEX=${{ github.event.inputs.start_index }}" >> $GITHUB_ENV
+          elif [ -f scrape_index.txt ]; then
+            echo "INDEX=$(cat scrape_index.txt)" >> $GITHUB_ENV
+          else
+            echo "INDEX=0" >> $GITHUB_ENV
+          fi
 
       # ── Step 3: Scrape DigiKey + Newark ──────────────────────────────────
-      #- name: Run scrapeNetwork.py
-       # env:
-        #  NW_API_KEY: ${{ secrets.NW_API_KEY }}
-         # INDEX:      ${{ env.INDEX }}
-        #run: python scrapeNetwork.py
+      - name: Run scrapeNetwork.py
+        env:
+          NW_API_KEY: ${{ secrets.NW_API_KEY }}
+          INDEX:      ${{ env.INDEX }}
+        run: python scrapeNetwork.py
 
       # ── Step 4: Update Wix products ───────────────────────────────────────
       - name: Run update.py
