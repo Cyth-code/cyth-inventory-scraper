@@ -314,7 +314,16 @@ def main():
 
         if processed > 0 and processed % 100 == 0:
             with write_lock:
-                comp_data.to_csv('comp_data.csv')
+                comp_data = pd.read_csv('comp_data.csv', dtype={
+        'sku':               str,
+        'digikey_url':       str,
+        'digikey_status':    str,
+        'newark_url':        str,
+        'newark_status':     str,
+        'combined_status':   str,
+        'combined_stock':    str,
+        'last_updated':      str,
+    }).set_index('sku')
                 print(f"  Checkpoint: {processed} done")
 
     # Final save
