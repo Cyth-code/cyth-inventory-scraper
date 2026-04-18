@@ -4,6 +4,8 @@ update.py — Combined CMS + Store ribbon update
 
 Two steps:
   1. Push all scraped data to Wix CMS collection (Import912)
+     - comp_data is the source of truth
+     - No comparison with Wix Store products
   2. Update product ribbons in Wix Store catalog
 """
 
@@ -43,10 +45,16 @@ def safe_float(val, default=0.0):
     except:
         return default
 
-def safe_str(val):
+def safe_str(val, default='NA'):
     if val is None or (isinstance(val, float) and val != val):
-        return ''
-    return str(val).strip()
+        return default
+    s = str(val).strip()
+    return s if s and s != 'nan' else default
+
+def safe_bool(val):
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ('true', '1', 'yes')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PART 1 — CMS Collection Update
@@ -127,10 +135,11 @@ def create_cms_item(data):
 
 def process_cms_sku(sku, row, sku_to_item):
     try:
-        combined_status = safe_str(row.get('combined_status'))
-        combined_stock  = safe_str(row.get('combined_stock'))
+        combined_status = safe_str(row.get('combined_status'), default='')
+        combined_stock  = safe_str(row.get('combined_stock'), default='')
 
-        if pd.isna(row.get('combined_status')) or combined_status in ('', 'nan'):
+        # Skip unscraped SKUs
+        if combined_status in ('', 'NA'):
             return sku, 'skipped'
 
         data = {
@@ -144,9 +153,9 @@ def process_cms_sku(sku, row, sku_to_item):
             'newark_price':       safe_float(row.get('newark_price')),
             'newark_status':      safe_str(row.get('newark_status')),
             'combined_inventory': safe_float(row.get('combined_inventory')),
-            'InStock':            bool(row.get('InStock', False)),
+            'InStock':            safe_bool(row.get('InStock', False)),
             'combined_status':    combined_status,
-            'last_updated':       safe_str(row.get('last_updated')) or today,
+            'last_updated':       safe_str(row.get('last_updated'), default=today),
         }
 
         item_id = sku_to_item.get(sku)
@@ -246,13 +255,13 @@ def update_store_ribbon(product_id, ribbon):
 
 def process_store_sku(sku, row, sku_to_id):
     try:
-        combined_stock  = safe_str(row.get('combined_stock'))
-        combined_status = safe_str(row.get('combined_status'))
+        combined_stock  = safe_str(row.get('combined_stock'), default='')
+        combined_status = safe_str(row.get('combined_status'), default='')
 
-        if pd.isna(row.get('combined_status')) or combined_status in ('', 'nan'):
+        if combined_status in ('', 'NA'):
             return sku, 'skipped'
 
-        # Never show ribbon for obsolete products
+        # Never show ribbon for obsolete
         ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
 
         # Try exact SKU match
@@ -334,7 +343,6 @@ def update_catalog():
     print(f"  Out of Stock: {out_stock}")
     print(f"  Obsolete:     {obsolete}")
 
-    # Write summary for email report
     scrape_summary = {}
     if os.path.exists('scrape_summary.json'):
         with open('scrape_summary.json') as f:
