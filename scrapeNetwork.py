@@ -11,6 +11,8 @@ Logic:
      - Neither has stock but active → Available to Order
      - Both obsolete → OBSOLETE - CONTACT CYTH
   3. Missing URLs set to 'NA'
+  4. Retry logic — 3 attempts per SKU
+  5. Correct dtype loading for comp_data.csv
 """
 
 import requests
@@ -246,8 +248,19 @@ def main():
     client_ids     = creds_file['client_ids']
     dk_client_data = creds_file['client_data']
 
-    comp_data = pd.read_csv('comp_data.csv').set_index('sku')
-    total     = len(comp_data)
+    # Load comp_data with correct dtypes to avoid float64 errors
+    comp_data = pd.read_csv('comp_data.csv', dtype={
+        'sku':             str,
+        'digikey_url':     str,
+        'digikey_status':  str,
+        'newark_url':      str,
+        'newark_status':   str,
+        'combined_status': str,
+        'combined_stock':  str,
+        'last_updated':    str,
+    }).set_index('sku')
+
+    total = len(comp_data)
 
     index = int(os.environ.get('INDEX', '0'))
     if index >= total:
@@ -312,18 +325,10 @@ def main():
 
         i += len(batch_skus)
 
+        # Checkpoint every 100 SKUs
         if processed > 0 and processed % 100 == 0:
             with write_lock:
-                comp_data = pd.read_csv('comp_data.csv', dtype={
-        'sku':               str,
-        'digikey_url':       str,
-        'digikey_status':    str,
-        'newark_url':        str,
-        'newark_status':     str,
-        'combined_status':   str,
-        'combined_stock':    str,
-        'last_updated':      str,
-    }).set_index('sku')
+                comp_data.to_csv('comp_data.csv')
                 print(f"  Checkpoint: {processed} done")
 
     # Final save
