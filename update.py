@@ -5,7 +5,8 @@ update.py — Combined CMS + Store ribbon update
 Two steps:
   1. Push all scraped data to Wix CMS collection (Import912)
      - comp_data is the source of truth
-     - No comparison with Wix Store products
+     - InStock field ID is 'inStock' (lowercase i)
+     - URLs default to homepage if not found
   2. Update product ribbons in Wix Store catalog
 """
 
@@ -45,16 +46,21 @@ def safe_float(val, default=0.0):
     except:
         return default
 
-def safe_str(val, default='NA'):
+def safe_str(val, default=''):
     if val is None or (isinstance(val, float) and val != val):
         return default
     s = str(val).strip()
-    return s if s and s != 'nan' else default
+    return s if s and s not in ('nan', 'None') else default
 
 def safe_bool(val):
-    if isinstance(val, bool):
-        return val
     return str(val).strip().lower() in ('true', '1', 'yes')
+
+def safe_url(val, fallback):
+    """Return val if it's a real URL, otherwise return fallback homepage."""
+    s = safe_str(val)
+    if s in ('', 'NA', 'nan', 'None'):
+        return fallback
+    return s
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PART 1 — CMS Collection Update
@@ -135,8 +141,8 @@ def create_cms_item(data):
 
 def process_cms_sku(sku, row, sku_to_item):
     try:
-        combined_status = safe_str(row.get('combined_status'), default='')
-        combined_stock  = safe_str(row.get('combined_stock'), default='')
+        combined_status = safe_str(row.get('combined_status'))
+        combined_stock  = safe_str(row.get('combined_stock'))
 
         # Skip unscraped SKUs
         if combined_status in ('', 'NA'):
@@ -144,18 +150,18 @@ def process_cms_sku(sku, row, sku_to_item):
 
         data = {
             'sku':                sku,
-            'digikey_url':        safe_str(row.get('digikey_url')),
+            'digikey_url':        safe_url(row.get('digikey_url'), 'https://www.digikey.com'),
             'digikey_inventory':  safe_float(row.get('digikey_inventory')),
             'digikey_price':      safe_float(row.get('digikey_price')),
             'digikey_status':     safe_str(row.get('digikey_status')),
-            'newark_url':         safe_str(row.get('newark_url')),
+            'newark_url':         safe_url(row.get('newark_url'), 'https://www.newark.com'),
             'newark_inventory':   safe_float(row.get('newark_inventory')),
             'newark_price':       safe_float(row.get('newark_price')),
             'newark_status':      safe_str(row.get('newark_status')),
             'combined_inventory': safe_float(row.get('combined_inventory')),
-            'inStock':            safe_bool(row.get('inStock', False)),
+            'inStock':            safe_bool(row.get('InStock', False)),  # field ID is lowercase
             'combined_status':    combined_status,
-            'last_updated':       safe_str(row.get('last_updated'), default=today),
+            'last_updated':       safe_str(row.get('last_updated')) or today,
         }
 
         item_id = sku_to_item.get(sku)
@@ -255,8 +261,8 @@ def update_store_ribbon(product_id, ribbon):
 
 def process_store_sku(sku, row, sku_to_id):
     try:
-        combined_stock  = safe_str(row.get('combined_stock'), default='')
-        combined_status = safe_str(row.get('combined_status'), default='')
+        combined_stock  = safe_str(row.get('combined_stock'))
+        combined_status = safe_str(row.get('combined_status'))
 
         if combined_status in ('', 'NA'):
             return sku, 'skipped'
@@ -319,7 +325,7 @@ def run_store_update(dfOutput):
 
 def update_catalog():
     try:
-        dfOutput = pd.read_csv('comp_data.csv', index_col='sku')
+        dfOutput = pd.read_csv('comp_data.csv', dtype=str, index_col='sku')
     except FileNotFoundError:
         raise SystemExit("Error: comp_data.csv not found.")
 
