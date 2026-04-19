@@ -146,6 +146,14 @@ def process_cms_sku(sku, row, sku_to_item):
 
         # Skip unscraped SKUs
         if combined_status in ('', 'NA'):
+            product_id = sku_to_id.get(sku)
+            if not product_id:
+                parts = sku.split('-')
+                if len(parts) == 2 and not parts[1].startswith('0'):
+                    alt_sku = f"{parts[0]}-0{parts[1]}"
+                    product_id = sku_to_id.get(alt_sku)
+            if product_id:
+                update_store_ribbon(product_id, None)
             return sku, 'skipped'
 
         data = {
