@@ -5,6 +5,8 @@ update.py — Combined CMS + Store ribbon update
 Two steps:
   1. Push all scraped data to Wix CMS collection (Import912)
   2. Update product ribbons in Wix Store catalog
+     - Primary: bulk fetch all products
+     - Fallback: targeted SKU query for any missing ones
 """
 
 import pandas as pd
@@ -138,7 +140,6 @@ def create_cms_item(data):
 def process_cms_sku(sku, row, sku_to_item):
     try:
         combined_status = safe_str(row.get('combined_status'))
-        combined_stock  = safe_str(row.get('combined_stock'))
 
         if combined_status in ('', 'NA'):
             return sku, 'skipped'
@@ -201,6 +202,7 @@ def run_cms_update(dfOutput):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def fetch_all_wix_products():
+    """Bulk fetch all products from Wix Store."""
     print("Fetching Wix Store products...")
     sku_to_id = {}
     offset    = 0
@@ -235,8 +237,35 @@ def fetch_all_wix_products():
             break
         offset += limit
 
-    print(f"  Total Store products: {len(sku_to_id)}\n")
+    print(f"  Total Store products (bulk): {len(sku_to_id)}")
     return sku_to_id
+
+
+def fetch_product_by_sku(sku):
+    """
+    Targeted query for a specific SKU.
+    Used as fallback for SKUs missed by bulk fetch.
+    """
+    body = {
+        'query': {
+            'filter': json.dumps({'sku': {'$eq': sku}}),
+            'paging': {'limit': 1}
+        }
+    }
+    try:
+        response = requests.post(
+            f'{WIX_STORE_BASE}/products/query',
+            headers=get_wix_headers(),
+            json=body,
+            timeout=10
+        )
+        if response.status_code == 200:
+            products = response.json().get('products', [])
+            if products:
+                return products[0].get('id')
+    except Exception as e:
+        print(f"  Targeted fetch error for {sku}: {e}")
+    return None
 
 
 def update_store_ribbon(product_id, ribbon):
@@ -269,15 +298,23 @@ def process_store_sku(sku, row, sku_to_id):
         # Never show ribbon for obsolete
         ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
 
-        # Try exact SKU match
+        # Step 1 — exact SKU match from bulk fetch
         product_id = sku_to_id.get(sku)
 
-        # Try removing leading zero (e.g. 150275-01R5 → 150275-1R5)
+        # Step 2 — try removing leading zero (e.g. 150275-01R5 → 150275-1R5)
         if not product_id:
             parts = sku.split('-')
             if len(parts) == 2 and parts[1].startswith('0'):
                 alt_sku = f"{parts[0]}-{parts[1].lstrip('0')}"
                 product_id = sku_to_id.get(alt_sku)
+
+        # Step 3 — targeted API query for this specific SKU
+        if not product_id:
+            print(f"  {sku}: not in bulk fetch — trying targeted query")
+            product_id = fetch_product_by_sku(sku)
+            if product_id:
+                print(f"  {sku}: found via targeted query ✓")
+                sku_to_id[sku] = product_id  # cache for future
 
         if not product_id:
             return sku, 'notfound'
@@ -352,7 +389,7 @@ def update_catalog():
     if not_found_skus:
         with open('not_in_store.txt', 'w') as f:
             f.write('\n'.join(not_found_skus))
-        print(f"\n  Not found SKUs saved to not_in_store.txt")
+        print(f"\n  {len(not_found_skus)} SKUs not found — saved to not_in_store.txt")
 
     scrape_summary = {}
     if os.path.exists('scrape_summary.json'):
