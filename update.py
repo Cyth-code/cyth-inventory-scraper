@@ -5,8 +5,6 @@ update.py — Combined CMS + Store ribbon update
 Two steps:
   1. Push all scraped data to Wix CMS collection (Import912)
   2. Update product ribbons in Wix Store catalog
-     - Primary: fetch SKU → product ID from Wix API
-     - Fallback: use catalog_products.csv for SKUs not found via API
 """
 
 import pandas as pd
@@ -203,15 +201,10 @@ def run_cms_update(dfOutput):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def fetch_all_wix_products():
-    """
-    Fetch SKU → product ID from Wix Store API.
-    Also builds handleId → product ID map for catalog CSV fallback.
-    """
     print("Fetching Wix Store products...")
-    sku_to_id    = {}
-    handle_to_id = {}
-    offset       = 0
-    limit        = 100
+    sku_to_id = {}
+    offset    = 0
+    limit     = 100
 
     while True:
         body = {'query': {'paging': {'limit': limit, 'offset': offset}}}
@@ -229,14 +222,9 @@ def fetch_all_wix_products():
         products = response.json().get('products', [])
         for product in products:
             product_id = product.get('id')
-            slug       = product.get('slug', '').strip()  # handleId equivalent
-            sku        = product.get('sku', '').strip()
-
+            sku = product.get('sku', '').strip()
             if sku:
                 sku_to_id[sku] = product_id
-            if slug:
-                handle_to_id[slug] = product_id
-
             for variant in product.get('variants', []):
                 v_sku = variant.get('variant', {}).get('sku', '').strip()
                 if v_sku:
@@ -247,30 +235,8 @@ def fetch_all_wix_products():
             break
         offset += limit
 
-    print(f"  Total Store products (by SKU): {len(sku_to_id)}")
-    print(f"  Total Store products (by handle): {len(handle_to_id)}\n")
-    return sku_to_id, handle_to_id
-
-
-def load_catalog_fallback():
-    """
-    Load catalog CSV as fallback SKU → handleId map.
-    Used when Wix API doesn't return SKU for a product.
-    """
-    try:
-        catalog = pd.read_csv('catalog_products.csv', low_memory=False)
-        catalog = catalog[catalog['fieldType'] == 'Product']
-        sku_to_handle = {}
-        for _, row in catalog.iterrows():
-            sku    = str(row.get('sku', '') or '').strip()
-            handle = str(row.get('handleId', '') or '').strip()
-            if sku and handle:
-                sku_to_handle[sku] = handle
-        print(f"  Catalog fallback loaded: {len(sku_to_handle)} SKUs\n")
-        return sku_to_handle
-    except FileNotFoundError:
-        print("  No catalog_products.csv found — skipping fallback\n")
-        return {}
+    print(f"  Total Store products: {len(sku_to_id)}\n")
+    return sku_to_id
 
 
 def update_store_ribbon(product_id, ribbon):
@@ -288,7 +254,7 @@ def update_store_ribbon(product_id, ribbon):
         return False
 
 
-def process_store_sku(sku, row, sku_to_id, handle_to_id, sku_to_handle):
+def process_store_sku(sku, row, sku_to_id):
     try:
         combined_stock  = safe_str(row.get('combined_stock'))
         combined_status = safe_str(row.get('combined_status'))
@@ -296,10 +262,6 @@ def process_store_sku(sku, row, sku_to_id, handle_to_id, sku_to_handle):
         # Clear ribbon for unscraped SKUs
         if combined_status in ('', 'NA'):
             product_id = sku_to_id.get(sku)
-            if not product_id:
-                handle = sku_to_handle.get(sku)
-                if handle:
-                    product_id = handle_to_id.get(handle)
             if product_id:
                 update_store_ribbon(product_id, None)
             return sku, 'skipped'
@@ -307,23 +269,15 @@ def process_store_sku(sku, row, sku_to_id, handle_to_id, sku_to_handle):
         # Never show ribbon for obsolete
         ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
 
-        # Step 1 — Try exact SKU match from API
+        # Try exact SKU match
         product_id = sku_to_id.get(sku)
 
-        # Step 2 — Try removing leading zero (e.g. 150275-01R5 → 150275-1R5)
+        # Try removing leading zero (e.g. 150275-01R5 → 150275-1R5)
         if not product_id:
             parts = sku.split('-')
             if len(parts) == 2 and parts[1].startswith('0'):
                 alt_sku = f"{parts[0]}-{parts[1].lstrip('0')}"
                 product_id = sku_to_id.get(alt_sku)
-
-        # Step 3 — Fallback: use catalog CSV handleId → Wix product ID
-        if not product_id:
-            handle = sku_to_handle.get(sku)
-            if handle:
-                product_id = handle_to_id.get(handle)
-                if product_id:
-                    print(f"  {sku}: matched via catalog fallback")
 
         if not product_id:
             return sku, 'notfound'
@@ -341,14 +295,13 @@ def run_store_update(dfOutput):
     print("STEP 2 — Updating Store Ribbons")
     print("═" * 50)
 
-    sku_to_id, handle_to_id = fetch_all_wix_products()
-    sku_to_handle           = load_catalog_fallback()
-    results                 = {'updated': 0, 'notfound': 0, 'skipped': 0, 'failed': 0}
-    not_found               = []
+    sku_to_id = fetch_all_wix_products()
+    results   = {'updated': 0, 'notfound': 0, 'skipped': 0, 'failed': 0}
+    not_found = []
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
-            executor.submit(process_store_sku, sku, dfOutput.loc[sku].to_dict(), sku_to_id, handle_to_id, sku_to_handle): sku
+            executor.submit(process_store_sku, sku, dfOutput.loc[sku].to_dict(), sku_to_id): sku
             for sku in dfOutput.index
         }
         for i, fut in enumerate(as_completed(futures), 1):
