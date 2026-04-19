@@ -142,6 +142,10 @@ def process_cms_sku(sku, row, sku_to_item):
         combined_status = safe_str(row.get('combined_status'))
 
         if combined_status in ('', 'NA'):
+            item_id = sku_to_item.get(sku)
+            if not item_id:
+                create_cms_item({'sku': sku})
+                return sku, 'created'
             return sku, 'skipped'
 
         data = {
