@@ -93,7 +93,7 @@ def fetch_all_cms_items():
                 sku_to_item[sku] = item.get('id')
 
         print(f"  Fetched {offset + len(items)} CMS items...")
-        if not items:
+        if len(items) < limit:
             break
         offset += limit
 
@@ -233,8 +233,9 @@ def fetch_all_wix_products():
                     sku_to_id[v_sku] = product_id
 
         print(f"  Fetched {offset + len(products)} store products...")
-        if not products:
+        if len(products) < limit:
             break
+          
         offset += limit
 
     print(f"  Total Store products (bulk): {len(sku_to_id)}")
