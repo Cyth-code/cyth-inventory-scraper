@@ -56,11 +56,6 @@ jobs:
           INDEX:      ${{ env.INDEX }}
         run: python scrapeNetwork.py
         
-      - name: Diagnose store SKUs
-        env:
-          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
-          WIX_SITE_ID: ${{ secrets.WIX_SITE_ID }}
-        run: python diagnose_store.py
         
       # ── Update Wix CMS + Store Ribbons ─────────────────────────────────────
       - name: Run update.py
