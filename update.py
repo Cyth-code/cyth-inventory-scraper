@@ -301,7 +301,7 @@ def process_store_sku(sku, row, sku_to_id):
             return sku, 'skipped'
 
         # Never show ribbon for obsolete
-        ribbon = 'Ships in 3-5 Days' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
+        ribbon = 'In Stock, Ready to Ship' if combined_stock == 'Active' and combined_status != 'Obsolete' else None
 
         # Step 1 — exact SKU match from bulk fetch
         product_id = sku_to_id.get(sku)
