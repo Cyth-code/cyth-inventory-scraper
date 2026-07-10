@@ -14,6 +14,8 @@ import datetime
 import os
 import json
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -21,6 +23,23 @@ script_dir = Path(__file__).resolve().parent
 os.chdir(script_dir)
 
 today = datetime.datetime.now().strftime('%Y-%m-%d')
+
+# ── Shared session ──────────────────────────────────────────────────────────────
+# Reuses connections (instead of opening a fresh one per call) and automatically
+# retries transient failures (connect/read timeouts, 429/500/502/503/504) with
+# exponential backoff, instead of failing immediately on the first hiccup.
+_retry_strategy = Retry(
+    total=4,
+    connect=4,
+    read=4,
+    backoff_factor=1,   # waits 1s, 2s, 4s, 8s between retries
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=['GET', 'POST', 'PUT', 'PATCH']
+)
+_adapter = HTTPAdapter(max_retries=_retry_strategy, pool_connections=20, pool_maxsize=20)
+session = requests.Session()
+session.mount('https://', _adapter)
+session.mount('http://', _adapter)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 COLLECTION_ID  = 'Import912'
@@ -75,7 +94,7 @@ def fetch_all_cms_items():
             'dataCollectionId': COLLECTION_ID,
             'query': {'paging': {'limit': limit, 'offset': offset}}
         }
-        response = requests.post(
+        response = session.post(
             'https://www.wixapis.com/wix-data/v2/items/query',
             headers=get_wix_headers(),
             json=body,
@@ -107,13 +126,16 @@ def update_cms_item(item_id, data):
         'dataItem': {'id': item_id, 'data': data}
     }
     try:
-        response = requests.put(
+        response = session.put(
             f'{WIX_CMS_BASE}/{item_id}',
             headers=get_wix_headers(),
             json=body,
             timeout=10
         )
-        return response.status_code == 200
+        if response.status_code != 200:
+            print(f"  CMS update FAILED {item_id}: {response.status_code} {response.text[:300]}")
+            return False
+        return True
     except Exception as e:
         print(f"  CMS update error {item_id}: {e}")
         return False
@@ -125,13 +147,16 @@ def create_cms_item(data):
         'dataItem': {'data': data}
     }
     try:
-        response = requests.post(
+        response = session.post(
             WIX_CMS_BASE,
             headers=get_wix_headers(),
             json=body,
             timeout=10
         )
-        return response.status_code in (200, 201)
+        if response.status_code not in (200, 201):
+            print(f"  CMS create FAILED sku={data.get('sku')}: {response.status_code} {response.text[:300]}")
+            return False
+        return True
     except Exception as e:
         print(f"  CMS create error: {e}")
         return False
@@ -214,7 +239,7 @@ def fetch_all_wix_products():
 
     while True:
         body = {'query': {'paging': {'limit': limit, 'offset': offset}}}
-        response = requests.post(
+        response = session.post(
             f'{WIX_STORE_BASE}/products/query',
             headers=get_wix_headers(),
             json=body,
@@ -258,7 +283,7 @@ def fetch_product_by_sku(sku):
         }
     }
     try:
-        response = requests.post(
+        response = session.post(
             f'{WIX_STORE_BASE}/products/query',
             headers=get_wix_headers(),
             json=body,
@@ -276,13 +301,16 @@ def fetch_product_by_sku(sku):
 def update_store_ribbon(product_id, ribbon):
     payload = {'product': {'ribbon': ribbon if ribbon else ''}}
     try:
-        response = requests.patch(
+        response = session.patch(
             f'{WIX_STORE_BASE}/products/{product_id}',
             headers=get_wix_headers(),
             json=payload,
             timeout=10
         )
-        return response.status_code == 200
+        if response.status_code != 200:
+            print(f"  Store update FAILED {product_id}: {response.status_code} {response.text[:300]}")
+            return False
+        return True
     except Exception as e:
         print(f"  Store update error {product_id}: {e}")
         return False
