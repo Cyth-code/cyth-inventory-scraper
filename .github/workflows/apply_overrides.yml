@@ -1,0 +1,33 @@
+name: Apply "Available to Order" Overrides
+
+# Applies only the CMS checkbox / manual_skus.txt overrides — no scraping,
+# no other SKUs touched. Run it after the team ticks or unticks SKUs.
+on:
+  workflow_dispatch:
+  # Uncomment to apply new ticks automatically every day at 6 AM Pacific:
+  # schedule:
+  #   - cron: '0 14 * * *'
+
+jobs:
+  apply-overrides:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas
+
+      - name: Run apply_overrides.py
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+          WIX_SITE_ID: ${{ secrets.WIX_SITE_ID }}
+        run: python apply_overrides.py
