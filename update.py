@@ -395,33 +395,23 @@ def run_store_update(dfOutput):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# ── Manual "Available to Order" overrides ──────────────────────────────────────
-# SKUs listed in manual_skus.txt (one per line, # for comments) always show
-# "Available to Order": inStock = False, combined_status = Active, no ribbon.
-# Scraped data for these SKUs is ignored for stock status, so the weekly run
-# never puts an "In Stock" ribbon on them or marks them obsolete.
-MANUAL_SKUS_FILE = 'manual_skus.txt'
-
-
-def load_manual_skus():
-    if not os.path.exists(MANUAL_SKUS_FILE):
-        return set()
-    with open(MANUAL_SKUS_FILE, encoding='utf-8') as f:
-        return {line.split('#')[0].strip() for line in f if line.split('#')[0].strip()}
-
-
+# ── "Available to Order" overrides ─────────────────────────────────────────────
+# SKUs ticked in the CMS checkbox (OVERRIDE_FIELD) always show "Available to
+# Order": inStock = False, combined_status = Active, no ribbon. Scraped data for
+# these SKUs is ignored for stock status, so the weekly run never puts an
+# "In Stock" ribbon on them or marks them obsolete.
 OVERRIDE_SKUS = set()
 
 
-def apply_manual_overrides(dfOutput, cms_flagged=frozenset()):
+def apply_overrides(dfOutput, cms_flagged):
     global OVERRIDE_SKUS
-    manual = load_manual_skus() | set(cms_flagged)
-    OVERRIDE_SKUS = manual
-    if not manual:
+    flagged = set(cms_flagged)
+    OVERRIDE_SKUS = flagged
+    if not flagged:
         return dfOutput
 
-    matched = [s for s in manual if s in dfOutput.index]
-    missing = sorted(manual - set(matched))
+    matched = [s for s in flagged if s in dfOutput.index]
+    missing = sorted(flagged - set(matched))
 
     for col in ('InStock', 'combined_stock', 'combined_status'):
         if col not in dfOutput.columns:
@@ -430,7 +420,7 @@ def apply_manual_overrides(dfOutput, cms_flagged=frozenset()):
     dfOutput.loc[matched, 'combined_stock']  = 'Inactive'
     dfOutput.loc[matched, 'combined_status'] = 'Active'
 
-    print(f"Manual overrides: {len(matched)} SKU(s) forced to 'Available to Order'")
+    print(f"Overrides: {len(matched)} SKU(s) forced to 'Available to Order'")
     for sku in missing:
         print(f"  ⚠️ {sku} is flagged for override but not in comp_data.csv — check spelling")
     print()
@@ -451,8 +441,8 @@ def update_catalog():
     print("═" * 50)
     sku_to_item, cms_flagged = fetch_all_cms_items()
 
-    # Force flagged SKUs (CMS checkbox or manual_skus.txt) to "Available to Order"
-    dfOutput = apply_manual_overrides(dfOutput, cms_flagged)
+    # Force SKUs ticked in the CMS to "Available to Order"
+    dfOutput = apply_overrides(dfOutput, cms_flagged)
 
     cms_results = run_cms_update(dfOutput, sku_to_item)
 
