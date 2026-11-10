@@ -1,0 +1,8 @@
+# SKUs that should always show "Available to Order" (one per line).
+# Use the exact SKU as it appears in comp_data.csv. Lines starting with # are ignored.
+783480-01
+783145-01
+782752-01
+785023-01
+783196-01
+783173-01
