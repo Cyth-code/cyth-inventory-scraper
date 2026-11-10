@@ -2,8 +2,8 @@
 """
 apply_overrides.py — apply "Available to Order" overrides only.
 
-Reads SKUs ticked in the CMS checkbox (availableToOrder) plus any in
-manual_skus.txt, then for just those SKUs:
+Reads SKUs ticked in the CMS checkbox (force_available_to_order), then for
+just those SKUs:
   1. Sets inStock = False, combined_status = Active in the CMS
   2. Clears the store ribbon
 No scraping, and no other SKUs are touched. Takes a minute or two.
@@ -19,11 +19,11 @@ def main():
     df = pd.read_csv('comp_data.csv', dtype=str, index_col='sku')
 
     sku_to_item, cms_flagged = u.fetch_all_cms_items()
-    df = u.apply_manual_overrides(df, cms_flagged)
+    df = u.apply_overrides(df, cms_flagged)
 
     targets = sorted(s for s in u.OVERRIDE_SKUS if s in df.index)
     if not targets:
-        print('No SKUs are flagged for "Available to Order". Nothing to do.')
+        print('No SKUs are ticked in the CMS. Nothing to do.')
         return
 
     print(f'Applying overrides to {len(targets)} SKU(s)\n')
