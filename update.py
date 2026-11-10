@@ -44,7 +44,7 @@ session.mount('http://', _adapter)
 # ── Config ─────────────────────────────────────────────────────────────────────
 COLLECTION_ID  = 'Import912'
 # CMS checkbox the team ticks to force "Available to Order" for a SKU
-OVERRIDE_FIELD = 'availableToOrder'
+OVERRIDE_FIELD = 'force_available_to_order'
 WIX_CMS_BASE   = 'https://www.wixapis.com/wix-data/v2/items'
 WIX_STORE_BASE = 'https://www.wixapis.com/stores/v1'
 
