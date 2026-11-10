@@ -43,6 +43,8 @@ session.mount('http://', _adapter)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 COLLECTION_ID  = 'Import912'
+# CMS checkbox the team ticks to force "Available to Order" for a SKU
+OVERRIDE_FIELD = 'availableToOrder'
 WIX_CMS_BASE   = 'https://www.wixapis.com/wix-data/v2/items'
 WIX_STORE_BASE = 'https://www.wixapis.com/stores/v1'
 
@@ -86,6 +88,7 @@ def safe_url(val, fallback):
 def fetch_all_cms_items():
     print("Fetching existing CMS items...")
     sku_to_item = {}
+    flagged     = set()
     offset      = 0
     limit       = 100
 
@@ -110,14 +113,16 @@ def fetch_all_cms_items():
             sku = item.get('data', {}).get('sku', '').strip()
             if sku:
                 sku_to_item[sku] = item.get('id')
+                if item.get('data', {}).get(OVERRIDE_FIELD) is True:
+                    flagged.add(sku)
 
         print(f"  Fetched {offset + len(items)} CMS items...")
         if len(items) < limit:
             break
         offset += limit
 
-    print(f"  Total CMS items: {len(sku_to_item)}\n")
-    return sku_to_item
+    print(f"  Total CMS items: {len(sku_to_item)} ({len(flagged)} ticked '{OVERRIDE_FIELD}')\n")
+    return sku_to_item, flagged
 
 
 def update_cms_item(item_id, data):
@@ -187,6 +192,8 @@ def process_cms_sku(sku, row, sku_to_item):
             'inStock':            safe_bool(row.get('InStock', False)),
             'combined_status':    combined_status,
             'last_updated':       safe_str(row.get('last_updated')) or today,
+            # Preserve the team's checkbox — PUT replaces the whole row
+            OVERRIDE_FIELD:       sku in OVERRIDE_SKUS,
         }
 
         item_id = sku_to_item.get(sku)
@@ -202,12 +209,7 @@ def process_cms_sku(sku, row, sku_to_item):
         return sku, 'failed'
 
 
-def run_cms_update(dfOutput):
-    print("═" * 50)
-    print("STEP 1 — Updating CMS Collection")
-    print("═" * 50)
-
-    sku_to_item = fetch_all_cms_items()
+def run_cms_update(dfOutput, sku_to_item):
     results     = {'updated': 0, 'created': 0, 'skipped': 0, 'failed': 0}
 
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -408,8 +410,13 @@ def load_manual_skus():
         return {line.split('#')[0].strip() for line in f if line.split('#')[0].strip()}
 
 
-def apply_manual_overrides(dfOutput):
-    manual = load_manual_skus()
+OVERRIDE_SKUS = set()
+
+
+def apply_manual_overrides(dfOutput, cms_flagged=frozenset()):
+    global OVERRIDE_SKUS
+    manual = load_manual_skus() | set(cms_flagged)
+    OVERRIDE_SKUS = manual
     if not manual:
         return dfOutput
 
@@ -425,7 +432,7 @@ def apply_manual_overrides(dfOutput):
 
     print(f"Manual overrides: {len(matched)} SKU(s) forced to 'Available to Order'")
     for sku in missing:
-        print(f"  ⚠️ {sku} is in {MANUAL_SKUS_FILE} but not in comp_data.csv — check spelling")
+        print(f"  ⚠️ {sku} is flagged for override but not in comp_data.csv — check spelling")
     print()
     return dfOutput
 
@@ -438,11 +445,16 @@ def update_catalog():
 
     print(f"Loaded {len(dfOutput)} SKUs from comp_data.csv\n")
 
-    # Force manual SKUs to "Available to Order" before anything is pushed
-    dfOutput = apply_manual_overrides(dfOutput)
+    # Read CMS first so the team's checkboxes are known before anything is pushed
+    print("═" * 50)
+    print("STEP 1 — Updating CMS Collection")
+    print("═" * 50)
+    sku_to_item, cms_flagged = fetch_all_cms_items()
 
-    # Step 1 — CMS update
-    cms_results = run_cms_update(dfOutput)
+    # Force flagged SKUs (CMS checkbox or manual_skus.txt) to "Available to Order"
+    dfOutput = apply_manual_overrides(dfOutput, cms_flagged)
+
+    cms_results = run_cms_update(dfOutput, sku_to_item)
 
     # Step 2 — Store ribbon update
     store_results, not_found_skus = run_store_update(dfOutput)
