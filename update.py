@@ -392,6 +392,44 @@ def run_store_update(dfOutput):
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ── Manual "Available to Order" overrides ──────────────────────────────────────
+# SKUs listed in manual_skus.txt (one per line, # for comments) always show
+# "Available to Order": inStock = False, combined_status = Active, no ribbon.
+# Scraped data for these SKUs is ignored for stock status, so the weekly run
+# never puts an "In Stock" ribbon on them or marks them obsolete.
+MANUAL_SKUS_FILE = 'manual_skus.txt'
+
+
+def load_manual_skus():
+    if not os.path.exists(MANUAL_SKUS_FILE):
+        return set()
+    with open(MANUAL_SKUS_FILE, encoding='utf-8') as f:
+        return {line.split('#')[0].strip() for line in f if line.split('#')[0].strip()}
+
+
+def apply_manual_overrides(dfOutput):
+    manual = load_manual_skus()
+    if not manual:
+        return dfOutput
+
+    matched = [s for s in manual if s in dfOutput.index]
+    missing = sorted(manual - set(matched))
+
+    for col in ('InStock', 'combined_stock', 'combined_status'):
+        if col not in dfOutput.columns:
+            dfOutput[col] = ''
+    dfOutput.loc[matched, 'InStock']         = 'False'
+    dfOutput.loc[matched, 'combined_stock']  = 'Inactive'
+    dfOutput.loc[matched, 'combined_status'] = 'Active'
+
+    print(f"Manual overrides: {len(matched)} SKU(s) forced to 'Available to Order'")
+    for sku in missing:
+        print(f"  ⚠️ {sku} is in {MANUAL_SKUS_FILE} but not in comp_data.csv — check spelling")
+    print()
+    return dfOutput
+
+
 def update_catalog():
     try:
         dfOutput = pd.read_csv('comp_data.csv', dtype=str, index_col='sku')
@@ -399,6 +437,9 @@ def update_catalog():
         raise SystemExit("Error: comp_data.csv not found.")
 
     print(f"Loaded {len(dfOutput)} SKUs from comp_data.csv\n")
+
+    # Force manual SKUs to "Available to Order" before anything is pushed
+    dfOutput = apply_manual_overrides(dfOutput)
 
     # Step 1 — CMS update
     cms_results = run_cms_update(dfOutput)
