@@ -59,6 +59,7 @@ jobs:
         
       # ── Update Wix CMS + Store Ribbons ─────────────────────────────────────
       - name: Run update.py
+        id: update
         env:
           WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
           WIX_SITE_ID: ${{ secrets.WIX_SITE_ID }}
@@ -72,3 +73,14 @@ jobs:
           git add comp_data.csv scrape_index.txt
           git diff --staged --quiet || git commit -m "chore: update comp_data.csv [$(date '+%Y-%m-%d')]"
           git push
+
+      # ── Email the run report (runs even if an earlier step failed) ────────
+      - name: Email run report
+        if: always()
+        env:
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO:       ${{ secrets.EMAIL_TO }}
+          JOB_STATUS:     ${{ job.status }}
+          RUN_URL:        ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python send_report.py

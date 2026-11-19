@@ -412,11 +412,13 @@ def run_store_update(dfOutput):
 # Order": inStock = False, combined_status = Active, no ribbon. Scraped data for
 # these SKUs is ignored for stock status, so the weekly run never puts an
 # "In Stock" ribbon on them or marks them obsolete.
-OVERRIDE_SKUS = set()
+OVERRIDE_SKUS   = set()
+TICKED_OBSOLETE = []   # ticked but obsolete — for the email report
+TICKED_MISSING  = []   # ticked but not in comp_data.csv
 
 
 def apply_overrides(dfOutput, cms_flagged):
-    global OVERRIDE_SKUS
+    global OVERRIDE_SKUS, TICKED_OBSOLETE, TICKED_MISSING
     flagged = set(cms_flagged)
     OVERRIDE_SKUS = flagged
     if not flagged:
@@ -432,6 +434,7 @@ def apply_overrides(dfOutput, cms_flagged):
     # even when ticked. Everything else ticked shows "Available to Order".
     obsolete = [s for s in matched if (dfOutput.at[s, 'combined_status'] or '').strip() == 'Obsolete']
     available = [s for s in matched if s not in set(obsolete)]
+    TICKED_OBSOLETE, TICKED_MISSING = sorted(obsolete), missing
 
     dfOutput.loc[matched,   'InStock']         = 'False'      # never "In Stock"
     dfOutput.loc[matched,   'combined_stock']  = 'Inactive'   # never gets a ribbon
@@ -446,6 +449,41 @@ def apply_overrides(dfOutput, cms_flagged):
         print(f"  ⚠️ {sku} is flagged for override but not in comp_data.csv — check spelling")
     print()
     return dfOutput
+
+
+def build_action_items(dfOutput, cms_results, store_results, not_found_skus):
+    """Things someone should look at after this run, for the email report."""
+    def status_of(sku):
+        return (dfOutput.at[sku, 'combined_status'] or '').strip() if sku in dfOutput.index else ''
+
+    newly_obsolete, back_active = [], []
+    for sku in dfOutput.index:
+        before = (CMS_DATA.get(sku, {}).get('combined_status') or '').strip()
+        after  = status_of(sku)
+        if before == 'Active' and after == 'Obsolete':
+            newly_obsolete.append(sku)
+        elif before == 'Obsolete' and after == 'Active' and sku not in OVERRIDE_SKUS:
+            back_active.append(sku)
+
+    # Active, not ticked, and in stock → getting the "In Stock, Ready to Ship" ribbon
+    ribbon_not_ticked = sorted(
+        sku for sku in dfOutput.index
+        if sku not in OVERRIDE_SKUS
+        and safe_str(dfOutput.at[sku, 'combined_stock']) == 'Active'
+        and status_of(sku) != 'Obsolete'
+    )
+
+    return {
+        'newly_obsolete':    sorted(newly_obsolete),
+        'ticked_obsolete':   TICKED_OBSOLETE,
+        'back_active':       sorted(back_active),
+        'ribbon_not_ticked': ribbon_not_ticked,
+        'ticked_missing':    TICKED_MISSING,
+        'not_in_store':      sorted(not_found_skus),
+        'cms_failed':        cms_results.get('failed', 0),
+        'store_failed':      store_results.get('failed', 0),
+        'ticked_total':      len(OVERRIDE_SKUS),
+    }
 
 
 def update_catalog():
@@ -507,8 +545,10 @@ def update_catalog():
         'not_found_skus': not_found_skus[:20],
     }
 
+    full_summary['actions'] = build_action_items(dfOutput, cms_results, store_results, not_found_skus)
+
     with open('full_summary.json', 'w') as f:
-        json.dump(full_summary, f)
+        json.dump(full_summary, f, indent=2)
 
 
 if __name__ == '__main__':
