@@ -1,6 +1,6 @@
 name: Apply "Available to Order" Overrides
 
-# Applies only the CMS checkbox / manual_skus.txt overrides — no scraping,
+# Applies only the CMS checkbox (force_available_to_order) overrides — no scraping,
 # no other SKUs touched. Run it after the team ticks or unticks SKUs.
 on:
   workflow_dispatch:
