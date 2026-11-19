@@ -45,6 +45,16 @@ session.mount('http://', _adapter)
 COLLECTION_ID  = 'Import912'
 # CMS checkbox the team ticks to force "Available to Order" for a SKU
 OVERRIDE_FIELD = 'force_available_to_order'
+
+# Full CMS row data by SKU, filled by fetch_all_cms_items(). Used to keep every
+# field the script doesn't manage (cyth_inventory, the override checkbox, and any
+# field added later) when a row is rewritten — the Wix update replaces the whole row.
+CMS_DATA = {}
+
+
+def editable_fields(data):
+    """Drop Wix system fields (_id, _owner, _createdDate, ...) before writing back."""
+    return {k: v for k, v in (data or {}).items() if not k.startswith('_')}
 WIX_CMS_BASE   = 'https://www.wixapis.com/wix-data/v2/items'
 WIX_STORE_BASE = 'https://www.wixapis.com/stores/v1'
 
@@ -113,6 +123,7 @@ def fetch_all_cms_items():
             sku = item.get('data', {}).get('sku', '').strip()
             if sku:
                 sku_to_item[sku] = item.get('id')
+                CMS_DATA[sku]    = item.get('data', {})
                 if item.get('data', {}).get(OVERRIDE_FIELD) is True:
                     flagged.add(sku)
 
@@ -178,7 +189,7 @@ def process_cms_sku(sku, row, sku_to_item):
                 return sku, 'created'
             return sku, 'skipped'
 
-        data = {
+        scraped = {
             'sku':                sku,
             'digikey_url':        safe_url(row.get('digikey_url'), 'https://www.digikey.com'),
             'digikey_inventory':  safe_float(row.get('digikey_inventory')),
@@ -192,9 +203,10 @@ def process_cms_sku(sku, row, sku_to_item):
             'inStock':            safe_bool(row.get('InStock', False)),
             'combined_status':    combined_status,
             'last_updated':       safe_str(row.get('last_updated')) or today,
-            # Preserve the team's checkbox — PUT replaces the whole row
-            OVERRIDE_FIELD:       sku in OVERRIDE_SKUS,
         }
+        # Start from the existing row so team-managed fields (cyth_inventory,
+        # force_available_to_order, ...) survive, then overwrite scraped fields.
+        data = {**editable_fields(CMS_DATA.get(sku)), **scraped}
 
         item_id = sku_to_item.get(sku)
         if item_id:
@@ -416,11 +428,20 @@ def apply_overrides(dfOutput, cms_flagged):
     for col in ('InStock', 'combined_stock', 'combined_status'):
         if col not in dfOutput.columns:
             dfOutput[col] = ''
-    dfOutput.loc[matched, 'InStock']         = 'False'
-    dfOutput.loc[matched, 'combined_stock']  = 'Inactive'
-    dfOutput.loc[matched, 'combined_status'] = 'Active'
+    # Obsolete parts keep their scraped status so they still show as obsolete,
+    # even when ticked. Everything else ticked shows "Available to Order".
+    obsolete = [s for s in matched if (dfOutput.at[s, 'combined_status'] or '').strip() == 'Obsolete']
+    available = [s for s in matched if s not in set(obsolete)]
 
-    print(f"Overrides: {len(matched)} SKU(s) forced to 'Available to Order'")
+    dfOutput.loc[matched,   'InStock']         = 'False'      # never "In Stock"
+    dfOutput.loc[matched,   'combined_stock']  = 'Inactive'   # never gets a ribbon
+    dfOutput.loc[available, 'combined_status'] = 'Active'
+
+    print(f"Overrides: {len(available)} SKU(s) forced to 'Available to Order'")
+    if obsolete:
+        print(f"  ⚠️ {len(obsolete)} ticked SKU(s) are obsolete — showing as obsolete, not 'Available to Order':")
+        for sku in sorted(obsolete):
+            print(f"      {sku}")
     for sku in missing:
         print(f"  ⚠️ {sku} is flagged for override but not in comp_data.csv — check spelling")
     print()

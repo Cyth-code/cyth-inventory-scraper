@@ -1,0 +1,36 @@
+name: Tick "Available to Order" for All Active Products (one-time)
+
+# Ticks force_available_to_order in the CMS for every product that is Active
+# at DigiKey or Newark. Obsolete products are left unticked. Never unticks.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '"yes" only shows counts, "no" ticks the products'
+        required: true
+        default: 'yes'
+
+jobs:
+  tick-available:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas
+
+      - name: Run tick_available.py
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+          WIX_SITE_ID: ${{ secrets.WIX_SITE_ID }}
+          DRY_RUN:     ${{ github.event.inputs.dry_run }}
+        run: python tick_available.py
