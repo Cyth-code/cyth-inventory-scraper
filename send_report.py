@@ -52,10 +52,13 @@ def build_email(summary, status, run_url):
                 'Were obsolete, now available again. Tick "Force Available to Order" in the CMS '
                 'so they show as Available to Order.'),
         section('Showing "In Stock" ribbon, not ticked', a.get('ribbon_not_ticked', []),
-                'Active and in stock, but not ticked, so they get the "In Stock, Ready to Ship" ribbon. '
-                'Tick them in the CMS if they should show Available to Order instead.'),
+                'In stock at a distributor, but not ticked and not in Cyth inventory, so they get the '
+                '"In Stock, Ready to Ship" ribbon. Tick them in the CMS to show Available to Order instead.'),
         section('Ticked but not in the scraper data', a.get('ticked_missing', []),
                 'Ticked in the CMS but not in comp_data.csv. Check the SKU spelling.'),
+        section('In Cyth inventory but not in the scraper data', a.get('cyth_missing', []),
+                'cyth_inventory is filled in the CMS but the SKU is not in comp_data.csv, so it did not get '
+                'the "In Stock" ribbon. Check the SKU spelling.'),
         section('Not found in Wix Store', a.get('not_in_store', []),
                 'In the scraper data but no matching store product, so no ribbon was updated. '
                 'Check the SKU on the store product.'),
@@ -70,7 +73,8 @@ def build_email(summary, status, run_url):
 
     headline = '✅ Completed' if status == 'success' else '⚠️ Finished with errors'
     totals = (f"In stock: {summary.get('in_stock', 0)} · Out of stock: {summary.get('out_of_stock', 0)} · "
-              f"Obsolete: {summary.get('obsolete', 0)} · Ticked Available to Order: {a.get('ticked_total', 0)}<br>"
+              f"Obsolete: {summary.get('obsolete', 0)} · Ticked Available to Order: {a.get('ticked_total', 0)} · "
+              f"Cyth inventory (In Stock ribbon): {a.get('cyth_total', 0)}<br>"
               f"CMS rows updated: {summary.get('cms_updated', 0)} · Store ribbons updated: {summary.get('wix_updated', 0)}")
 
     html = f'''<div style="font-family:Arial,sans-serif;font-size:14px;max-width:720px">
@@ -83,7 +87,7 @@ def build_email(summary, status, run_url):
 </div>'''
     action_count = sum(len(a.get(k, [])) for k in
                        ('newly_obsolete', 'ticked_obsolete', 'back_active', 'ribbon_not_ticked',
-                        'ticked_missing', 'not_in_store'))
+                        'ticked_missing', 'cyth_missing', 'not_in_store'))
     subject = (f'Inventory scraper: {action_count} item(s) to review'
                if action_count or failures else 'Inventory scraper: no changes needed')
     if status != 'success':

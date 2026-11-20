@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-apply_overrides.py — apply "Available to Order" overrides only.
+apply_overrides.py — apply the CMS overrides only (no scraping).
 
-Reads SKUs ticked in the CMS checkbox (force_available_to_order), then for
-just those SKUs:
-  1. Sets inStock = False, combined_status = Active in the CMS
-  2. Clears the store ribbon
-No scraping, and no other SKUs are touched. Takes a minute or two.
+  * cyth_inventory filled in → inStock = True, Active, "In Stock, Ready to Ship" ribbon
+  * force_available_to_order ticked → inStock = False, Active, no ribbon
+    ("Available to Order"); obsolete parts stay obsolete
+
+Only those SKUs are touched. Takes a few minutes.
 
 Env: WIX_API_KEY, WIX_SITE_ID
 """
@@ -23,9 +23,9 @@ def main():
     sku_to_item, cms_flagged = u.fetch_all_cms_items()
     df = u.apply_overrides(df, cms_flagged)
 
-    targets = sorted(s for s in u.OVERRIDE_SKUS if s in df.index)
+    targets = sorted(s for s in u.OVERRIDE_SKUS | u.CYTH_SKUS if s in df.index)
     if not targets:
-        print('No SKUs are ticked in the CMS. Nothing to do.')
+        print('No SKUs are ticked or in Cyth inventory in the CMS. Nothing to do.')
         return
 
     print(f'Applying overrides to {len(targets)} SKU(s)\n')
@@ -51,7 +51,7 @@ def main():
 
     if failed:
         raise SystemExit(f'\n{len(failed)} SKU(s) had problems: {", ".join(failed)}')
-    print('\nDone — all flagged SKUs show "Available to Order".')
+    print('\nDone — Cyth inventory shows "In Stock, Ready to Ship"; ticked SKUs show "Available to Order".')
 
 
 if __name__ == '__main__':

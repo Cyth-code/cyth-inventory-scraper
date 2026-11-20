@@ -45,6 +45,25 @@ session.mount('http://', _adapter)
 COLLECTION_ID  = 'Import912'
 # CMS checkbox the team ticks to force "Available to Order" for a SKU
 OVERRIDE_FIELD = 'force_available_to_order'
+# CMS field the team fills for SKUs Cyth has on the shelf (a tick or a quantity).
+# These show "In Stock, Ready to Ship" with a ribbon, whatever the distributors say.
+CYTH_FIELD     = 'cyth_inventory'
+CYTH_SKUS      = set()   # filled by fetch_all_cms_items()
+
+
+def has_cyth_stock(val):
+    """True for a ticked checkbox, a quantity above 0, or text like 'true'/'yes'/'5'."""
+    if val is True:
+        return True
+    if val is None or val is False:
+        return False
+    s = str(val).strip().lower()
+    if s in ('true', 'yes', 'y'):
+        return True
+    try:
+        return float(s) > 0
+    except ValueError:
+        return False
 
 # Full CMS row data by SKU, filled by fetch_all_cms_items(). Used to keep every
 # field the script doesn't manage (cyth_inventory, the override checkbox, and any
@@ -126,13 +145,16 @@ def fetch_all_cms_items():
                 CMS_DATA[sku]    = item.get('data', {})
                 if item.get('data', {}).get(OVERRIDE_FIELD) is True:
                     flagged.add(sku)
+                if has_cyth_stock(item.get('data', {}).get(CYTH_FIELD)):
+                    CYTH_SKUS.add(sku)
 
         print(f"  Fetched {offset + len(items)} CMS items...")
         if len(items) < limit:
             break
         offset += limit
 
-    print(f"  Total CMS items: {len(sku_to_item)} ({len(flagged)} ticked '{OVERRIDE_FIELD}')\n")
+    print(f"  Total CMS items: {len(sku_to_item)} ({len(flagged)} ticked '{OVERRIDE_FIELD}', "
+          f"{len(CYTH_SKUS)} in '{CYTH_FIELD}')\n")
     return sku_to_item, flagged
 
 
@@ -407,46 +429,61 @@ def run_store_update(dfOutput):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# ── "Available to Order" overrides ─────────────────────────────────────────────
-# SKUs ticked in the CMS checkbox (OVERRIDE_FIELD) always show "Available to
-# Order": inStock = False, combined_status = Active, no ribbon. Scraped data for
-# these SKUs is ignored for stock status, so the weekly run never puts an
-# "In Stock" ribbon on them or marks them obsolete.
+# ── Overrides from the CMS ─────────────────────────────────────────────────────
+# 1. Cyth inventory (CYTH_FIELD filled in): "In Stock, Ready to Ship" with a
+#    ribbon — inStock = True, combined_status = Active. Wins over everything,
+#    including the Available-to-Order tick and an Obsolete status at distributors.
+# 2. Ticked OVERRIDE_FIELD (and not in Cyth inventory): "Available to Order" —
+#    inStock = False, no ribbon. Obsolete parts keep showing as obsolete.
 OVERRIDE_SKUS   = set()
 TICKED_OBSOLETE = []   # ticked but obsolete — for the email report
 TICKED_MISSING  = []   # ticked but not in comp_data.csv
+CYTH_MISSING    = []   # in Cyth inventory but not in comp_data.csv
 
 
 def apply_overrides(dfOutput, cms_flagged):
-    global OVERRIDE_SKUS, TICKED_OBSOLETE, TICKED_MISSING
-    flagged = set(cms_flagged)
-    OVERRIDE_SKUS = flagged
-    if not flagged:
+    global OVERRIDE_SKUS, TICKED_OBSOLETE, TICKED_MISSING, CYTH_MISSING
+    OVERRIDE_SKUS = set(cms_flagged)
+    cyth = set(CYTH_SKUS)
+    if not (OVERRIDE_SKUS or cyth):
         return dfOutput
-
-    matched = [s for s in flagged if s in dfOutput.index]
-    missing = sorted(flagged - set(matched))
 
     for col in ('InStock', 'combined_stock', 'combined_status'):
         if col not in dfOutput.columns:
             dfOutput[col] = ''
+
+    cyth_matched = [s for s in cyth if s in dfOutput.index]
+    CYTH_MISSING = sorted(cyth - set(cyth_matched))
+
+    # Ticked SKUs that Cyth stocks are handled by the Cyth rule below
+    ticked  = OVERRIDE_SKUS - cyth
+    matched = [s for s in ticked if s in dfOutput.index]
+    TICKED_MISSING = sorted(ticked - set(matched))
+
     # Obsolete parts keep their scraped status so they still show as obsolete,
     # even when ticked. Everything else ticked shows "Available to Order".
     obsolete = [s for s in matched if (dfOutput.at[s, 'combined_status'] or '').strip() == 'Obsolete']
     available = [s for s in matched if s not in set(obsolete)]
-    TICKED_OBSOLETE, TICKED_MISSING = sorted(obsolete), missing
+    TICKED_OBSOLETE = sorted(obsolete)
 
     dfOutput.loc[matched,   'InStock']         = 'False'      # never "In Stock"
     dfOutput.loc[matched,   'combined_stock']  = 'Inactive'   # never gets a ribbon
     dfOutput.loc[available, 'combined_status'] = 'Active'
 
-    print(f"Overrides: {len(available)} SKU(s) forced to 'Available to Order'")
+    dfOutput.loc[cyth_matched, 'InStock']         = 'True'    # In Stock, Ready to Ship
+    dfOutput.loc[cyth_matched, 'combined_stock']  = 'Active'  # gets the ribbon
+    dfOutput.loc[cyth_matched, 'combined_status'] = 'Active'
+
+    print(f"Overrides: {len(cyth_matched)} SKU(s) in Cyth inventory → 'In Stock, Ready to Ship'")
+    print(f"           {len(available)} SKU(s) forced to 'Available to Order'")
     if obsolete:
         print(f"  ⚠️ {len(obsolete)} ticked SKU(s) are obsolete — showing as obsolete, not 'Available to Order':")
         for sku in sorted(obsolete):
             print(f"      {sku}")
-    for sku in missing:
+    for sku in TICKED_MISSING:
         print(f"  ⚠️ {sku} is flagged for override but not in comp_data.csv — check spelling")
+    for sku in CYTH_MISSING:
+        print(f"  ⚠️ {sku} is in Cyth inventory but not in comp_data.csv — not updated")
     print()
     return dfOutput
 
@@ -462,13 +499,14 @@ def build_action_items(dfOutput, cms_results, store_results, not_found_skus):
         after  = status_of(sku)
         if before == 'Active' and after == 'Obsolete':
             newly_obsolete.append(sku)
-        elif before == 'Obsolete' and after == 'Active' and sku not in OVERRIDE_SKUS:
+        elif before == 'Obsolete' and after == 'Active' and sku not in OVERRIDE_SKUS and sku not in CYTH_SKUS:
             back_active.append(sku)
 
-    # Active, not ticked, and in stock → getting the "In Stock, Ready to Ship" ribbon
+    # Active, not ticked, not Cyth stock, but in stock at a distributor →
+    # getting the "In Stock, Ready to Ship" ribbon although Cyth doesn't have it
     ribbon_not_ticked = sorted(
         sku for sku in dfOutput.index
-        if sku not in OVERRIDE_SKUS
+        if sku not in OVERRIDE_SKUS and sku not in CYTH_SKUS
         and safe_str(dfOutput.at[sku, 'combined_stock']) == 'Active'
         and status_of(sku) != 'Obsolete'
     )
@@ -483,6 +521,8 @@ def build_action_items(dfOutput, cms_results, store_results, not_found_skus):
         'cms_failed':        cms_results.get('failed', 0),
         'store_failed':      store_results.get('failed', 0),
         'ticked_total':      len(OVERRIDE_SKUS),
+        'cyth_missing':      CYTH_MISSING,
+        'cyth_total':        len(CYTH_SKUS),
     }
 
 
@@ -500,7 +540,7 @@ def update_catalog():
     print("═" * 50)
     sku_to_item, cms_flagged = fetch_all_cms_items()
 
-    # Force SKUs ticked in the CMS to "Available to Order"
+    # Cyth inventory → In Stock with ribbon; ticked → "Available to Order"
     dfOutput = apply_overrides(dfOutput, cms_flagged)
 
     cms_results = run_cms_update(dfOutput, sku_to_item)
